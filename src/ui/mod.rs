@@ -498,9 +498,9 @@ impl AppSweep {
                         // Search
                         let search_frame = Frame::NONE
                             .fill(if p.dark {
-                                Color32::from_rgb(15, 19, 27)
+                                Color32::from_rgb(24, 24, 24)
                             } else {
-                                Color32::from_rgb(248, 250, 253)
+                                Color32::from_rgb(240, 240, 240)
                             })
                             .stroke(Stroke::new(1.0, p.outline))
                             .corner_radius(CornerRadius::same(theme::R_PILL))

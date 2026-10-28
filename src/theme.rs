@@ -57,17 +57,17 @@ impl Palette {
         let accent = Color32::from_rgb(ar, ag, ab);
         match mode {
             ThemeMode::Dark => Self {
-                bg: Color32::from_rgb(13, 16, 23),
-                bg_alt: Color32::from_rgb(17, 21, 30),
-                panel: Color32::from_rgb(20, 25, 35),
-                card: Color32::from_rgb(24, 30, 42),
-                card_hover: Color32::from_rgb(31, 39, 54),
-                border: Color32::from_rgb(38, 46, 61),
-                border_strong: Color32::from_rgb(56, 68, 90),
-                outline: Color32::from_rgb(104, 114, 134),
-                text: Color32::from_rgb(232, 238, 248),
-                text_dim: Color32::from_rgb(160, 172, 192),
-                text_faint: Color32::from_rgb(138, 150, 167),
+                bg: Color32::from_rgb(17, 17, 17),
+                bg_alt: Color32::from_rgb(22, 22, 22),
+                panel: Color32::from_rgb(26, 26, 26),
+                card: Color32::from_rgb(30, 30, 30),
+                card_hover: Color32::from_rgb(38, 38, 38),
+                border: Color32::from_rgb(45, 45, 45),
+                border_strong: Color32::from_rgb(68, 68, 68),
+                outline: Color32::from_rgb(122, 122, 122),
+                text: Color32::from_rgb(234, 234, 234),
+                text_dim: Color32::from_rgb(176, 176, 176),
+                text_faint: Color32::from_rgb(150, 150, 150),
                 accent,
                 accent_soft: Color32::from_rgba_unmultiplied(ar, ag, ab, 38),
                 accent_text: Color32::from_rgb(
@@ -88,17 +88,17 @@ impl Palette {
                 dark: true,
             },
             ThemeMode::Light => Self {
-                bg: Color32::from_rgb(238, 241, 247),
-                bg_alt: Color32::from_rgb(236, 239, 245),
-                panel: Color32::from_rgb(255, 255, 255),
-                card: Color32::from_rgb(255, 255, 255),
-                card_hover: Color32::from_rgb(247, 249, 253),
-                border: Color32::from_rgb(219, 225, 235),
-                border_strong: Color32::from_rgb(196, 204, 218),
-                outline: Color32::from_rgb(120, 128, 142),
-                text: Color32::from_rgb(24, 30, 42),
-                text_dim: Color32::from_rgb(88, 100, 118),
-                text_faint: Color32::from_rgb(95, 105, 120),
+                bg: Color32::from_rgb(222, 222, 222),
+                bg_alt: Color32::from_rgb(226, 226, 226),
+                panel: Color32::from_rgb(234, 234, 234),
+                card: Color32::from_rgb(234, 234, 234),
+                card_hover: Color32::from_rgb(242, 242, 242),
+                border: Color32::from_rgb(212, 212, 212),
+                border_strong: Color32::from_rgb(186, 186, 186),
+                outline: Color32::from_rgb(116, 116, 116),
+                text: Color32::from_rgb(17, 17, 17),
+                text_dim: Color32::from_rgb(68, 68, 68),
+                text_faint: Color32::from_rgb(88, 88, 88),
                 accent,
                 accent_soft: Color32::from_rgba_unmultiplied(ar, ag, ab, 26),
                 // Light surfaces need a much darker ink than the accent itself:
@@ -106,12 +106,12 @@ impl Palette {
                 // still clears 4.5:1 once it is composited over every surface.
                 accent_text: ink_on_light(accent),
                 on_accent: readable_on(accent),
-                danger: Color32::from_rgb(180, 53, 65),
+                danger: Color32::from_rgb(162, 48, 58),
                 danger_soft: Color32::from_rgba_unmultiplied(203, 60, 74, 22),
-                on_danger: readable_on(Color32::from_rgb(180, 53, 65)),
-                warn: Color32::from_rgb(134, 94, 15),
+                on_danger: readable_on(Color32::from_rgb(162, 48, 58)),
+                warn: Color32::from_rgb(122, 86, 14),
                 warn_soft: Color32::from_rgba_unmultiplied(200, 150, 40, 26),
-                ok: Color32::from_rgb(24, 114, 75),
+                ok: Color32::from_rgb(22, 103, 68),
                 ok_soft: Color32::from_rgba_unmultiplied(30, 140, 92, 22),
                 hover_layer: Color32::from_rgba_unmultiplied(0, 0, 0, 20),
                 press_layer: Color32::from_rgba_unmultiplied(0, 0, 0, 31),
@@ -167,12 +167,12 @@ pub fn readable_on(bg: Color32) -> Color32 {
 /// Ink for text sitting on a light theme's `accent_soft` fill.
 fn ink_on_light(accent: Color32) -> Color32 {
     match (accent.r(), accent.g(), accent.b()) {
-        (56, 132, 255) => Color32::from_rgb(41, 96, 186),
-        (32, 178, 170) => Color32::from_rgb(20, 112, 107),
-        (139, 108, 246) => Color32::from_rgb(106, 82, 187),
-        (233, 168, 60) => Color32::from_rgb(133, 96, 34),
-        (232, 93, 124) => Color32::from_rgb(165, 66, 88),
-        (58, 183, 120) => Color32::from_rgb(37, 115, 76),
+        (56, 132, 255) => Color32::from_rgb(36, 84, 164),
+        (32, 178, 170) => Color32::from_rgb(18, 99, 94),
+        (139, 108, 246) => Color32::from_rgb(93, 72, 165),
+        (233, 168, 60) => Color32::from_rgb(117, 84, 30),
+        (232, 93, 124) => Color32::from_rgb(145, 58, 77),
+        (58, 183, 120) => Color32::from_rgb(33, 101, 68),
         other => Color32::from_rgb(other.0 * 3 / 4, other.1 * 3 / 4, other.2 * 3 / 4),
     }
 }
@@ -520,6 +520,32 @@ mod tests {
                     let r = contrast(p.outline, bg);
                     assert!(r >= 3.0, "{mode:?} {accent:?}: outline on {bg:?} is {r:.2}");
                 }
+            }
+        }
+    }
+    #[test]
+    fn the_base_palette_is_neutral_and_inverted() {
+        // The requested scheme: dark page #111111 with #EAEAEA text, light
+        // surface #EAEAEA with #111111 text.
+        let d = Palette::new(ThemeMode::Dark, Accent::Blue);
+        let l = Palette::new(ThemeMode::Light, Accent::Blue);
+        assert_eq!(d.bg, Color32::from_rgb(0x11, 0x11, 0x11));
+        assert_eq!(d.text, Color32::from_rgb(0xEA, 0xEA, 0xEA));
+        assert_eq!(l.card, Color32::from_rgb(0xEA, 0xEA, 0xEA));
+        assert_eq!(l.text, Color32::from_rgb(0x11, 0x11, 0x11));
+        // Every neutral in the ramp must stay grey, not drift blue like before.
+        for p in [d, l] {
+            for c in [
+                p.bg,
+                p.bg_alt,
+                p.panel,
+                p.card,
+                p.card_hover,
+                p.text,
+                p.text_dim,
+                p.text_faint,
+            ] {
+                assert!(c.r() == c.g() && c.g() == c.b(), "not neutral: {:?}", c);
             }
         }
     }

@@ -234,9 +234,9 @@ pub fn row(
             id_r,
             CornerRadius::same(theme::R_XS),
             if p.dark {
-                Color32::from_rgb(26, 32, 43)
+                Color32::from_rgb(24, 24, 24)
             } else {
-                Color32::from_rgb(240, 243, 248)
+                Color32::from_rgb(218, 218, 218)
             },
         );
         ui.painter().text(

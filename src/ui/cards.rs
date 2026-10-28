@@ -111,9 +111,9 @@ pub fn card(
     let mut chip_x = rect.left() + PAD;
     let chip_font = 11.0;
     let meta_bg = if p.dark {
-        egui::Color32::from_rgb(32, 39, 52)
+        egui::Color32::from_rgb(38, 38, 38)
     } else {
-        egui::Color32::from_rgb(238, 241, 247)
+        egui::Color32::from_rgb(224, 224, 224)
     };
 
     // Numeric id, first chip: this is what the delete gate asks for.
@@ -125,9 +125,9 @@ pub fn card(
             &format!("#{}", app.id),
             p.text_faint,
             if p.dark {
-                egui::Color32::from_rgb(26, 32, 43)
+                egui::Color32::from_rgb(24, 24, 24)
             } else {
-                egui::Color32::from_rgb(243, 245, 249)
+                egui::Color32::from_rgb(218, 218, 218)
             },
             chip_font,
             60.0,
@@ -207,9 +207,9 @@ pub fn card(
         "⌸",
         p.text_dim,
         if p.dark {
-            egui::Color32::from_rgb(30, 37, 50)
+            egui::Color32::from_rgb(42, 42, 42)
         } else {
-            egui::Color32::from_rgb(240, 243, 248)
+            egui::Color32::from_rgb(226, 226, 226)
         },
         p.card_hover,
         15.0,
