@@ -703,10 +703,12 @@ impl AppSweep {
                 icon: self.settings.icon_size,
             };
             let selected = self.selected;
+            let mut cols = 1usize;
 
             match self.view {
                 ViewMode::Cards => {
                     let gap = self.settings.density.spacing() + 4.0;
+                    cols = cards::layout(ui.available_width(), gap, self.settings.card_min_width).0;
                     let _out = egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
@@ -735,6 +737,64 @@ impl AppSweep {
                     {
                         act = Some(a);
                     }
+                }
+            }
+
+            // The grid and the table are painted rects, so they can never take
+            // focus themselves: the arrows act on the list whenever no text
+            // field wants the keyboard.
+            // shortcut: no scroll-into-view, so the selection can move past the
+            // visible rows; upgrade when the list gets a scroll anchor.
+            let modal_open = self.confirm.is_some()
+                || self.details.is_some()
+                || self.job.is_some()
+                || self.show_settings
+                || self.show_backups;
+            if !modal_open && !ui.ctx().egui_wants_keyboard_input() && !apps.is_empty() {
+                let len = apps.len();
+                let cur = selected
+                    .and_then(|id| apps.iter().position(|a| a.id == id))
+                    .unwrap_or(0);
+                let (up, down, left, right, home, end, enter, del) = ui.input(|i| {
+                    (
+                        i.key_pressed(egui::Key::ArrowUp),
+                        i.key_pressed(egui::Key::ArrowDown),
+                        i.key_pressed(egui::Key::ArrowLeft),
+                        i.key_pressed(egui::Key::ArrowRight),
+                        i.key_pressed(egui::Key::Home),
+                        i.key_pressed(egui::Key::End),
+                        i.key_pressed(egui::Key::Enter),
+                        i.key_pressed(egui::Key::Delete),
+                    )
+                });
+                let step = cols as isize;
+                let target = if up {
+                    Some(nav_index(len, cur, -step))
+                } else if down {
+                    Some(nav_index(len, cur, step))
+                } else if left {
+                    Some(nav_index(len, cur, -1))
+                } else if right {
+                    Some(nav_index(len, cur, 1))
+                } else if home {
+                    Some(0)
+                } else if end {
+                    Some(len - 1)
+                } else {
+                    None
+                };
+                let cur = target.unwrap_or(cur);
+                if enter {
+                    act = Some(Act::Details(apps[cur].id));
+                }
+                if del {
+                    act = Some(Act::Purge(apps[cur].id));
+                }
+                // Copied out first: pps borrows self, so it must die before
+                // the selection is written back.
+                if let Some(i) = target {
+                    let id = apps[i].id;
+                    self.selected = Some(id);
                 }
             }
 
@@ -1066,4 +1126,26 @@ fn parse_key(key: &str) -> (u64, u32) {
 #[allow(dead_code)]
 fn _unused_atomic(f: &Arc<AtomicBool>) {
     let _ = f.load(Ordering::Relaxed);
+}
+
+/// Where an arrow key lands: `cur` moved by `delta`, clamped to the list.
+fn nav_index(len: usize, cur: usize, delta: isize) -> usize {
+    (cur as isize + delta).clamp(0, len as isize - 1) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::nav_index;
+
+    #[test]
+    fn arrows_stay_inside_the_list() {
+        // Both edges must clamp instead of wrapping to the other end.
+        assert_eq!(nav_index(10, 0, -1), 0);
+        assert_eq!(nav_index(10, 9, 1), 9);
+        assert_eq!(nav_index(10, 4, 3), 7);
+        assert_eq!(nav_index(10, 8, 3), 9);
+        // A grid step larger than the list still has to land on the last row.
+        assert_eq!(nav_index(10, 9, -4), 5);
+        assert_eq!(nav_index(1, 0, -3), 0);
+    }
 }

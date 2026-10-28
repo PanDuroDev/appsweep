@@ -320,6 +320,20 @@ fn ctx_icon(ctx: &Ctx) -> f32 {
     ctx.icon
 }
 
+/// Columns and card width for a given width. Shared with the keyboard
+/// navigation, which needs to know how many cards sit side by side.
+pub fn layout(avail: f32, gap: f32, min_w: f32) -> (usize, f32) {
+    let mut cols = ((avail + gap) / (min_w + gap)).floor().max(1.0) as usize;
+    let mut w = (avail - gap * (cols.saturating_sub(1)) as f32) / cols as f32;
+    // Avoid absurdly wide cards on very wide windows.
+    let max_w = 460.0;
+    if w > max_w {
+        w = max_w;
+        cols = ((avail + gap) / (w + gap)).floor().max(1.0) as usize;
+    }
+    (cols, w)
+}
+
 /// Lay out the cards in a wrapping grid.
 pub fn grid(
     ui: &mut Ui,
@@ -330,15 +344,7 @@ pub fn grid(
     gap: f32,
     min_w: f32,
 ) -> Option<Act> {
-    let avail = ui.available_width();
-    let mut cols = ((avail + gap) / (min_w + gap)).floor().max(1.0) as usize;
-    let mut w = (avail - gap * (cols.saturating_sub(1)) as f32) / cols as f32;
-    // Avoid absurdly wide cards on very wide windows.
-    let max_w = 460.0;
-    if w > max_w {
-        w = max_w;
-        cols = ((avail + gap) / (w + gap)).floor().max(1.0) as usize;
-    }
+    let (cols, w) = layout(ui.available_width(), gap, min_w);
     let mut act = None;
     let mut row: Vec<&AppEntry> = Vec::new();
     let mut idx = 0usize;

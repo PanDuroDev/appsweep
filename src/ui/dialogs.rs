@@ -1063,7 +1063,9 @@ pub fn show_modal<R>(
         .frame(modal_frame(p))
         .backdrop_color(Color32::from_black_alpha(if p.dark { 170 } else { 90 }))
         .show(ctx, content);
-    let close = m.backdrop_response.clicked() && !m.any_popup_open;
+    // Escape closes the topmost dialog, like every other Windows window.
+    let escaped = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    let close = escaped || (m.backdrop_response.clicked() && !m.any_popup_open);
     (m.inner, close)
 }
 
