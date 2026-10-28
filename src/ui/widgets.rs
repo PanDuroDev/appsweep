@@ -159,6 +159,20 @@ pub fn text_fit(ui: &Ui, rect: Rect, text: &str, font: FontId, color: Color32, a
     );
 }
 
+/// Composite an alpha state layer over an opaque fill (the base is opaque by
+/// construction: pills, cards and rows all sit on a solid colour).
+pub fn tint(base: Color32, layer: Color32) -> Color32 {
+    // epaint colours are premultiplied, so the layer's rgb is already scaled by
+    // its alpha and only the base needs weighting.
+    let a = layer.a() as u32;
+    let mix = |b: u8, l: u8| (l as u32 + b as u32 * (255 - a) / 255).min(255) as u8;
+    Color32::from_rgb(
+        mix(base.r(), layer.r()),
+        mix(base.g(), layer.g()),
+        mix(base.b(), layer.b()),
+    )
+}
+
 /// A rounded pill drawn straight onto the painter, returns the click response.
 #[allow(clippy::too_many_arguments)]
 pub fn pill(
@@ -177,11 +191,21 @@ pub fn pill(
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    ui.painter().rect_filled(
-        rect,
-        CornerRadius::same(R_PILL),
-        if hovered { bg_hover } else { bg },
-    );
+    let fill = if resp.is_pointer_button_down_on() {
+        // Pressed: one tonal step past hover, so a click feels answered.
+        let layer = if ui.visuals().dark_mode {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 31)
+        } else {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 31)
+        };
+        tint(if hovered { bg_hover } else { bg }, layer)
+    } else if hovered {
+        bg_hover
+    } else {
+        bg
+    };
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(R_PILL), fill);
     ui.painter().text(
         rect.center(),
         Align2::CENTER_CENTER,
@@ -401,8 +425,14 @@ pub fn card_rect_style(ui: &mut Ui, ctx: &Ctx, w: f32, h: f32, selected: bool) -
     } else {
         p.card
     };
+    // A card under the cursor is one tonal step up, and one more while pressed.
+    let fill = if resp.is_pointer_button_down_on() {
+        tint(fill, p.press_layer)
+    } else {
+        fill
+    };
     let stroke = if selected {
-        Stroke::new(1.6, p.accent)
+        Stroke::new(2.0, p.accent)
     } else if hovered {
         Stroke::new(1.0, p.border_strong)
     } else {
@@ -437,6 +467,20 @@ mod tests {
         assert_eq!(bidi_runs("حذف كامل"), vec![(true, "حذف كامل".to_string())]);
         assert_eq!(bidi_runs("AppSweep"), vec![(false, "AppSweep".to_string())]);
         assert!(bidi_runs("").is_empty());
+    }
+
+    #[test]
+    fn a_state_layer_lands_between_fill_and_layer() {
+        let dark = crate::theme::Palette::new(
+            crate::settings::ThemeMode::Dark,
+            crate::settings::Accent::Blue,
+        );
+        // A press must lighten the surface, not swallow it.
+        let pressed = tint(dark.card, dark.press_layer);
+        assert_ne!(pressed, dark.card);
+        assert!(pressed.r() > dark.card.r());
+        assert_eq!(tint(dark.card, Color32::TRANSPARENT), dark.card);
+        assert_eq!(tint(dark.card, Color32::WHITE), Color32::WHITE);
     }
 
     #[test]

@@ -84,11 +84,11 @@ impl Palette {
                 ok: Color32::from_rgb(78, 198, 138),
                 ok_soft: Color32::from_rgba_unmultiplied(78, 198, 138, 32),
                 hover_layer: Color32::from_rgba_unmultiplied(255, 255, 255, 20),
-                press_layer: Color32::from_rgba_unmultiplied(255, 255, 255, 32),
+                press_layer: Color32::from_rgba_unmultiplied(255, 255, 255, 31),
                 dark: true,
             },
             ThemeMode::Light => Self {
-                bg: Color32::from_rgb(243, 245, 249),
+                bg: Color32::from_rgb(238, 241, 247),
                 bg_alt: Color32::from_rgb(236, 239, 245),
                 panel: Color32::from_rgb(255, 255, 255),
                 card: Color32::from_rgb(255, 255, 255),
@@ -113,8 +113,8 @@ impl Palette {
                 warn_soft: Color32::from_rgba_unmultiplied(200, 150, 40, 26),
                 ok: Color32::from_rgb(24, 114, 75),
                 ok_soft: Color32::from_rgba_unmultiplied(30, 140, 92, 22),
-                hover_layer: Color32::from_rgba_unmultiplied(0, 0, 0, 14),
-                press_layer: Color32::from_rgba_unmultiplied(0, 0, 0, 24),
+                hover_layer: Color32::from_rgba_unmultiplied(0, 0, 0, 20),
+                press_layer: Color32::from_rgba_unmultiplied(0, 0, 0, 31),
                 dark: false,
             },
         }
@@ -441,13 +441,23 @@ mod tests {
     fn state_layers_stay_translucent() {
         for mode in [ThemeMode::Dark, ThemeMode::Light] {
             let p = Palette::new(mode, Accent::Blue);
-            assert!(p.hover_layer.a() > 0);
-            assert!(p.hover_layer.a() < p.press_layer.a());
+            // Material 3 asks for 8 % hover and 12 % press; alpha is 0-255.
+            assert!((19..=21).contains(&p.hover_layer.a()), "{mode:?} hover");
+            assert!((30..=32).contains(&p.press_layer.a()), "{mode:?} press");
             assert!(
                 p.press_layer.a() < 60,
                 "a state layer must never hide the fill"
             );
         }
+    }
+
+    #[test]
+    fn the_page_sits_behind_the_cards() {
+        let light = Palette::new(ThemeMode::Light, Accent::Blue);
+        // White cards on a white page have no edge; the page must be darker.
+        assert!(luminance(light.bg) < luminance(light.card));
+        let dark = Palette::new(ThemeMode::Dark, Accent::Blue);
+        assert!(luminance(dark.bg) < luminance(dark.card));
     }
     #[test]
     fn every_text_role_clears_wcag_aa() {

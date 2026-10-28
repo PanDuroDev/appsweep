@@ -153,7 +153,7 @@ pub fn row(
     }
     let mut act = None;
 
-    let bg = if selected {
+    let mut bg = if selected {
         p.accent_soft
     } else if resp.hovered() {
         p.card_hover
@@ -162,13 +162,22 @@ pub fn row(
     } else {
         Color32::TRANSPARENT
     };
+    if resp.is_pointer_button_down_on() {
+        // The page shows through the even rows, so tint the page under them.
+        let base = if bg == Color32::TRANSPARENT { p.bg } else { bg };
+        bg = widgets::tint(base, p.press_layer);
+    }
     ui.painter().rect_filled(rect, 0, bg);
     if selected {
+        // A bar on the leading edge plus an outline: the row reads as selected
+        // without relying on the background tint alone.
         ui.painter().rect_filled(
-            Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + 2.0)),
+            Rect::from_min_max(rect.min, pos2(rect.left() + 3.0, rect.bottom())),
             0,
             p.accent,
         );
+        ui.painter()
+            .rect_stroke(rect, 0, Stroke::new(2.0, p.accent), StrokeKind::Inside);
     }
     ui.painter().rect_stroke(
         Rect::from_min_max(pos2(rect.left(), rect.bottom() - 1.0), rect.max),
