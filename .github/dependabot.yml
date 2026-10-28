@@ -1,0 +1,35 @@
+# Dependabot: keeps Cargo.toml/Cargo.lock and the workflow actions current.
+# Every PR it opens runs the same `ci` workflow as any other PR (fmt, clippy,
+# test, selftest) plus the `deps` dependency-review job, so a bump that breaks
+# the Windows build cannot be merged green.
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    # One PR for everything that is not a breaking major: the crate set is
+    # small and CI compiles all of it anyway, so per-crate PRs would be noise.
+    groups:
+      cargo-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "rust"]
+    commit-message:
+      prefix: "cargo"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    open-pull-requests-limit: 2
+    labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "ci"

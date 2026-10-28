@@ -1,0 +1,54 @@
+# CodeRabbit reviews every pull request, including Dependabot's, in Arabic.
+# It is advisory: the merge gate is the `build` job in ci.yml.
+language: ar
+early_access: false
+tone_instructions: "Critical, no flattery. This app deletes files and registry keys: a missing guard is data loss."
+reviews:
+  profile: chill
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  sequence_diagrams: false
+  # Build output, the shipped binary and the lockfile are machine product, not code.
+  path_filters:
+    - "!target/**"
+    - "!release/**"
+    - "!**/*.exe"
+    - "!**/*.pdb"
+    - "!Cargo.lock"
+  path_instructions:
+    - path: "src/**/*.rs"
+      instructions: |
+        AppSweep is a Windows uninstaller: every delete path is destructive and
+        irreversible. Flag any path, registry key, service, scheduled task or
+        process kill that is not filtered through model::is_protected_dir or
+        actions::safe_paths. Flag unwrap/expect on filesystem, registry or
+        winapi calls. Arabic and Latin text must be painted as separate runs
+        (see ui::widgets::bidi_runs) because epaint does no bidi reordering;
+        flag any mixed-direction string built into one label.
+    - path: "src/actions.rs"
+      instructions: |
+        The delete engine. Check the order: the registry is backed up before
+        DeleteReg, Verify follows every deletion, no protected directory ever
+        reaches an operation, and a failed step still runs its fallbacks.
+    - path: ".github/workflows/**"
+      instructions: |
+        Keep the gates strict: no continue-on-error on fmt/clippy/test/selftest,
+        no unpinned @main refs, least-privilege permissions, and a Dependabot
+        PR must run exactly the steps a human PR runs.
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+  tools:
+    # CI already runs clippy with -D warnings; keep it in the review for context.
+    clippy:
+      enabled: true
+    # README is Arabic and comments are short: both tools only add noise here.
+    markdownlint:
+      enabled: false
+    languagetool:
+      enabled: false
+chat:
+  auto_reply: true
