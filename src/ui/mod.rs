@@ -577,11 +577,13 @@ impl AppSweep {
                             ) {
                                 self.settings.sort_desc = !self.settings.sort_desc;
                             }
+                            // No fixed limit: the menu opens at its natural
+                            // height and only starts scrolling when it would run
+                            // past the screen.
+                            ui.spacing_mut().combo_height =
+                                ui.ctx().viewport_rect().height() - 80.0;
                             egui::ComboBox::from_id_salt("sort-bottom")
                                 .selected_text(self.settings.sort.label())
-                                // egui adds the button padding on top of this, so
-                                // it is the control height minus that padding.
-                                .height(theme::CONTROL_H - 8.0)
                                 .width(120.0)
                                 .show_ui(ui, |ui| {
                                     for k in [
