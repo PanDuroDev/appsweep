@@ -499,24 +499,58 @@ impl AppSweep {
                             .stroke(Stroke::new(1.0, p.outline))
                             .corner_radius(CornerRadius::same(theme::R_PILL))
                             .inner_margin(Margin::symmetric(14, 0));
-                        search_frame.show(ui, |ui| {
-                            // The field and the text area inside it are both given
-                            // the control height with no padding of their own, so the
-                            // placeholder sits on the same baseline as the text you
-                            // type. The old `symmetric(_, 5)` frame plus the edit's
-                            // built-in margin pushed the hint off centre.
-                            ui.spacing_mut().interact_size.y = theme::CONTROL_H;
-                            ui.add_sized(
-                                vec2(220.0, theme::CONTROL_H),
-                                egui::TextEdit::singleline(&mut self.search)
-                                    .hint_text(
-                                        RichText::new("Search or ID number").color(p.text_faint),
-                                    )
-                                    .frame(egui::Frame::NONE)
-                                    .margin(Margin::ZERO)
-                                    .text_color(p.text),
+                        let mut focused = false;
+                        let search = search_frame.show(ui, |ui| {
+                            // Left to right inside the pill, whatever the bar does:
+                            // the field first, then the clear button at the edge.
+                            // The size is explicit because a bare layout would
+                            // stretch the pill across the whole header.
+                            let clear_w = if self.search.is_empty() { 0.0 } else { 26.0 };
+                            ui.allocate_ui_with_layout(
+                                vec2(220.0 + clear_w, theme::CONTROL_H),
+                                Layout::left_to_right(Align::Center),
+                                |ui| {
+                                    ui.spacing_mut().interact_size.y = theme::CONTROL_H;
+                                    let edit = ui.add_sized(
+                                        vec2(220.0, theme::CONTROL_H),
+                                        egui::TextEdit::singleline(&mut self.search)
+                                            .hint_text(
+                                                RichText::new("Search or ID number")
+                                                    .color(p.text_faint),
+                                            )
+                                            .frame(egui::Frame::NONE)
+                                            .margin(Margin::ZERO)
+                                            .text_color(p.text),
+                                    );
+                                    focused = edit.has_focus();
+                                    if !self.search.is_empty() {
+                                        let clear = ui.add(
+                                            egui::Button::new(
+                                                RichText::new("\u{00d7}")
+                                                    .size(theme::T_UI)
+                                                    .color(p.text_dim),
+                                            )
+                                            .frame(false)
+                                            .min_size(vec2(18.0, 18.0)),
+                                        );
+                                        if clear.clicked() {
+                                            self.search.clear();
+                                            edit.request_focus();
+                                        }
+                                    }
+                                },
                             );
                         });
+                        // The frame cannot draw its own focus state: it is built
+                        // before the field knows it. Paint it over the response.
+                        if focused {
+                            ui.painter().rect_stroke(
+                                search.response.rect,
+                                CornerRadius::same(theme::R_PILL),
+                                Stroke::new(1.6, p.accent),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
                     });
                 });
 
