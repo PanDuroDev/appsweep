@@ -10,6 +10,10 @@ pub const R_XL: u8 = 28; // dialogs
 pub const R_PILL: u8 = 255; // fully rounded: buttons, filter pills (egui clamps to half the height)
 
 // Material 3 type scale, in points.
+/// Height of every interactive control in a bar: pills, the search field and
+/// the sort combo. One number so they line up instead of each picking its own.
+pub const CONTROL_H: f32 = 30.0;
+
 pub const T_LABEL: f32 = 11.0;
 pub const T_BODY: f32 = 12.0;
 pub const T_UI: f32 = 14.0;

@@ -1082,7 +1082,7 @@ pub fn nav_pill(ui: &mut Ui, p: &Palette, label: &str, active: bool) -> bool {
                 .size()
                 .x
                 + 26.0,
-            30.0,
+            theme::CONTROL_H,
         ),
         Sense::click(),
     );

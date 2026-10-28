@@ -466,12 +466,6 @@ impl AppSweep {
                                 .font(theme::bold(theme::T_HEADLINE))
                                 .color(p.text),
                         );
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new("App manager")
-                                .font(FontId::proportional(theme::T_BODY))
-                                .color(p.text_faint),
-                        );
                     }
 
                     // Search and navigation sit against the right edge.
@@ -504,13 +498,22 @@ impl AppSweep {
                             })
                             .stroke(Stroke::new(1.0, p.outline))
                             .corner_radius(CornerRadius::same(theme::R_PILL))
-                            .inner_margin(Margin::symmetric(12, 5));
+                            .inner_margin(Margin::symmetric(14, 0));
                         search_frame.show(ui, |ui| {
-                            ui.add(
+                            // The field and the text area inside it are both given
+                            // the control height with no padding of their own, so the
+                            // placeholder sits on the same baseline as the text you
+                            // type. The old `symmetric(_, 5)` frame plus the edit's
+                            // built-in margin pushed the hint off centre.
+                            ui.spacing_mut().interact_size.y = theme::CONTROL_H;
+                            ui.add_sized(
+                                vec2(220.0, theme::CONTROL_H),
                                 egui::TextEdit::singleline(&mut self.search)
-                                    .hint_text("Search or ID number")
-                                    .desired_width(190.0)
+                                    .hint_text(
+                                        RichText::new("Search or ID number").color(p.text_faint),
+                                    )
                                     .frame(egui::Frame::NONE)
+                                    .margin(Margin::ZERO)
                                     .text_color(p.text),
                             );
                         });
@@ -550,7 +553,7 @@ impl AppSweep {
                 ui.horizontal(|ui| {
                     // Left block: view controls.
                     ui.allocate_ui_with_layout(
-                        vec2((total_w - 460.0).max(120.0), 26.0),
+                        vec2((total_w - 460.0).max(120.0), theme::CONTROL_H),
                         Layout::left_to_right(Align::Center),
                         |ui| {
                             if dialogs::nav_pill(ui, &p, "Cards", self.view == ViewMode::Cards) {
@@ -562,12 +565,24 @@ impl AppSweep {
                                 self.settings.view = ViewMode::Table;
                             }
                             ui.add_space(8.0);
-                            if dialogs::nav_pill(ui, &p, "Sort", false) {
+                            if dialogs::nav_pill(
+                                ui,
+                                &p,
+                                if self.settings.sort_desc {
+                                    "Desc"
+                                } else {
+                                    "Asc"
+                                },
+                                false,
+                            ) {
                                 self.settings.sort_desc = !self.settings.sort_desc;
                             }
                             egui::ComboBox::from_id_salt("sort-bottom")
                                 .selected_text(self.settings.sort.label())
-                                .width(110.0)
+                                // egui adds the button padding on top of this, so
+                                // it is the control height minus that padding.
+                                .height(theme::CONTROL_H - 8.0)
+                                .width(120.0)
                                 .show_ui(ui, |ui| {
                                     for k in [
                                         SortKey::Name,
@@ -600,7 +615,7 @@ impl AppSweep {
                     // flush with the edge, which means the items are added in
                     // reverse reading order: Admin, warnings, shown, total, size.
                     ui.allocate_ui_with_layout(
-                        vec2(440.0, 26.0),
+                        vec2(440.0, theme::CONTROL_H),
                         Layout::right_to_left(Align::Center),
                         |ui| {
                             if self.elevated {
