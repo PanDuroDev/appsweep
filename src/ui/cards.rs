@@ -144,20 +144,6 @@ pub fn card(
         );
         chip_x = r.right() + 6.0;
     }
-    if !app.version.is_empty() && chip_room(rect.right(), chip_x) >= CHIP_MIN {
-        let room = chip_room(rect.right(), chip_x);
-        let r = widgets::chip_left(
-            ui,
-            chip_x,
-            chip_y,
-            &app.version,
-            p.text_dim,
-            meta_bg,
-            chip_font,
-            room,
-        );
-        chip_x = r.right() + 6.0;
-    }
     if chip_room(rect.right(), chip_x) >= CHIP_MIN {
         let room = chip_room(rect.right(), chip_x);
         let src_bg = if app.is_system {
@@ -178,7 +164,8 @@ pub fn card(
         );
         chip_x = r.right() + 6.0;
     }
-    if app.is_system && chip_room(rect.right(), chip_x) >= CHIP_MIN {
+    let store_source = app.source == crate::model::Source::Uwp;
+    if app.is_system && !store_source && chip_room(rect.right(), chip_x) >= CHIP_MIN {
         let room = chip_room(rect.right(), chip_x);
         let r = widgets::chip_left(
             ui,
@@ -231,29 +218,6 @@ pub fn card(
         act = Some(Act::Reveal(app.id));
     }
     x += btn_h + 8.0;
-
-    let files_w = 62.0;
-    let files_rect = Rect::from_min_size(pos2(x, btn_y), vec2(files_w, btn_h));
-    if widgets::pill(
-        ui,
-        ("files", app.id),
-        files_rect,
-        "Files",
-        p.text_dim,
-        if p.dark {
-            egui::Color32::from_rgb(30, 37, 50)
-        } else {
-            egui::Color32::from_rgb(240, 243, 248)
-        },
-        p.card_hover,
-        12.0,
-    )
-    .on_hover_text("Delete only the app's files")
-    .clicked()
-    {
-        act = Some(Act::Files(app.id));
-    }
-    x += files_w + 8.0;
 
     let purge_w = 78.0;
     let purge_rect = Rect::from_min_size(pos2(x, btn_y), vec2(purge_w, btn_h));

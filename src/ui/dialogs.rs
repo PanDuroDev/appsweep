@@ -145,6 +145,17 @@ fn section(ui: &mut Ui, p: &Palette, text: &str) {
     ui.add_space(2.0);
 }
 
+/// A dialog's scroll height: its preferred height, but never more than the
+/// viewport can hold next to the frame margins, title, footer and a 12-point
+/// gap. Without the cap the footer covers the last row on short screens.
+fn scroll_cap(ui: &Ui, chrome: f32, preferred: f32) -> f32 {
+    scroll_cap_for(ui.ctx().viewport_rect().height(), chrome, preferred)
+}
+
+fn scroll_cap_for(viewport: f32, chrome: f32, preferred: f32) -> f32 {
+    preferred.min((viewport - chrome).max(180.0))
+}
+
 // ---------------------------------------------------------------- confirmation
 
 pub struct ConfirmState {
@@ -525,7 +536,7 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
     ui.add_space(8.0);
 
     egui::ScrollArea::vertical()
-        .max_height(320.0)
+        .max_height(scroll_cap(ui, 300.0, 320.0))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for st in &job.steps {
@@ -668,7 +679,7 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
     // The sheet can be taller than the screen once traces and notes are
     // included, so the body scrolls and the footer stays put.
     egui::ScrollArea::vertical()
-        .max_height(500.0)
+        .max_height(scroll_cap(ui, 260.0, 500.0))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -876,7 +887,7 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
     title(ui, p, "Settings");
 
     egui::ScrollArea::vertical()
-        .max_height(560.0)
+        .max_height(scroll_cap(ui, 300.0, 560.0))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             section(ui, p, "Appearance");
@@ -1025,7 +1036,7 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
             });
         });
 
-    ui.add_space(10.0);
+    ui.add_space(12.0);
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if widgets::button(ui, p, "Save and close", Btn::Filled, 130.0, 34.0).clicked() {
@@ -1177,7 +1188,7 @@ pub fn backups(
     } else {
         let list_h = (items.len() as f32 * 46.0).min(300.0);
         egui::ScrollArea::vertical()
-            .max_height(list_h)
+            .max_height(scroll_cap(ui, 320.0, list_h))
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 6.0;
@@ -1301,4 +1312,19 @@ pub fn backups(
     });
 
     act
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dialog_scroll_area_never_runs_past_the_footer() {
+        // A tall window keeps the preferred height.
+        assert_eq!(scroll_cap_for(1400.0, 300.0, 560.0), 560.0);
+        // A short one shrinks instead of pushing the footer off-screen.
+        assert_eq!(scroll_cap_for(800.0, 300.0, 560.0), 500.0);
+        // Never collapses so far that the dialog is unusable.
+        assert_eq!(scroll_cap_for(300.0, 300.0, 560.0), 180.0);
+    }
 }
