@@ -271,7 +271,7 @@ pub fn icon_pill(
     font_size: f32,
 ) -> Response {
     let resp = pill(ui, salt, rect, "", fg, bg, bg_hover, font_size);
-    let icon = font_size + 2.0;
+    let icon = (font_size + 6.0).min(rect.height() - 8.0);
     let galley =
         ui.painter()
             .layout_no_wrap(label.to_string(), FontId::proportional(font_size), fg);

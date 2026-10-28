@@ -1129,7 +1129,7 @@ fn nav_pill_inner(
     let fg = if active { p.accent_text } else { p.text_dim };
     match glyph {
         Some(g) => {
-            let size = theme::T_BODY + 2.0;
+            let size = theme::T_BODY + 6.0;
             let galley = ui.painter().layout_no_wrap(
                 label.to_string(),
                 FontId::proportional(theme::T_BODY),

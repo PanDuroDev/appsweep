@@ -527,7 +527,7 @@ impl AppSweep {
                                 |ui| {
                                     ui.spacing_mut().interact_size.y = theme::CONTROL_H;
                                     let (ir, _) = ui.allocate_exact_size(
-                                        vec2(16.0, 16.0),
+                                        vec2(18.0, 18.0),
                                         egui::Sense::hover(),
                                     );
                                     magnifier = Some(ir);
@@ -541,6 +541,10 @@ impl AppSweep {
                                             )
                                             .frame(egui::Frame::NONE)
                                             .margin(Margin::ZERO)
+                                            // A sized TextEdit lays its galley at
+                                            // the top of the rect; centre it or the
+                                            // hint sits high in the pill.
+                                            .align(egui::Align2::LEFT_CENTER)
                                             .text_color(p.text),
                                     );
                                     focused = edit.has_focus();
