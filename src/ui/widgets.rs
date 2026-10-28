@@ -423,9 +423,13 @@ pub fn paint_icon(ui: &mut Ui, ctx: &Ctx, app: &AppEntry, rect: Rect, size: u32)
     }
     match icon_texture(ctx.cache, app, size) {
         Some(tex) => {
-            let uv = Rect::from_min_max(pos2(0.0, 1.0), pos2(1.0, 0.0));
+            // The helper hands back a top-down DIB (biHeight is negative), so
+            // the rows are already in screen order: flipping V here turned every
+            // app icon upside down.
+            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
             ui.painter().image(tex.id(), rect, uv, Color32::WHITE);
         }
+        None if app.icon_source().is_none() && super::brand::paint(ui, rect, &app.name) => {}
         None => {
             // Placeholder: rounded square with the first letter of the name.
             ui.painter()

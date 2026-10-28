@@ -1,5 +1,6 @@
 //! The application shell: header, list area, status bar and the modal stack.
 
+pub mod brand;
 pub mod cards;
 pub mod dialogs;
 pub mod glyph;

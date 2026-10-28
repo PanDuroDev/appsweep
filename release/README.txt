@@ -46,3 +46,4 @@ Note
 A purge cannot be undone. Check the path in the details sheet before confirming.
 
 UI icons: MingCute (Apache-2.0) - https://www.mingcute.com
+Brand marks for apps with no icon on disk: Simple Icons (CC0) - https://simpleicons.org
