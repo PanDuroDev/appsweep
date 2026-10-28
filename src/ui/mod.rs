@@ -503,6 +503,12 @@ impl AppSweep {
                             self.start_scan(ctx);
                         }
 
+                        // Right to left, so this space lands between the
+                        // search pill and the Scan button: the frame's own edge
+                        // is the visual boundary, and the default 8 pt gap read
+                        // as if they touched.
+                        ui.add_space(8.0);
+
                         // Search
                         let search_frame = Frame::NONE
                             .fill(if p.dark {
