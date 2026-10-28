@@ -31,12 +31,9 @@ pub fn card(
         act = Some(Act::Select(app.id));
     }
 
-    // --- icon (right side, because the layout is right-to-left)
+    // --- icon (left side)
     let isz = icon.max(32.0);
-    let icon_rect = Rect::from_min_size(
-        pos2(rect.right() - PAD - isz, rect.top() + PAD),
-        vec2(isz, isz),
-    );
+    let icon_rect = Rect::from_min_size(pos2(rect.left() + PAD, rect.top() + PAD), vec2(isz, isz));
     widgets::paint_icon(ui, ctx, app, icon_rect, icon_px);
     // Clicking the icon opens the full details sheet.
     if ui
@@ -51,9 +48,9 @@ pub fn card(
         act = Some(Act::Details(app.id));
     }
 
-    // --- star (top left)
+    // --- star (top right)
     let star_rect = Rect::from_min_size(
-        pos2(rect.left() + PAD - 4.0, rect.top() + PAD - 4.0),
+        pos2(rect.right() - PAD - 20.0, rect.top() + PAD - 4.0),
         vec2(24.0, 24.0),
     );
     if widgets::star(ui, ("star", app.id), star_rect, app.favorite, p)
@@ -63,9 +60,9 @@ pub fn card(
         act = Some(Act::Favorite(app.id));
     }
 
-    // --- name and publisher, to the left of the icon
-    let text_right = icon_rect.left() - 10.0;
-    let text_left = rect.left() + PAD + 18.0;
+    // --- name and publisher, to the right of the icon
+    let text_left = icon_rect.right() + 10.0;
+    let text_right = rect.right() - PAD - 28.0;
     let name_rect = Rect::from_min_max(
         pos2(text_left, rect.top() + PAD + 2.0),
         pos2(text_right, rect.top() + PAD + 22.0),
@@ -77,7 +74,7 @@ pub fn card(
             &app.name,
             theme::bold(15.0),
             p.text,
-            Align2::RIGHT_CENTER,
+            Align2::LEFT_CENTER,
         );
     }
     let pub_text = if app.publisher.is_empty() {
@@ -96,21 +93,21 @@ pub fn card(
             &pub_text,
             FontId::proportional(12.0),
             p.text_dim,
-            Align2::RIGHT_CENTER,
+            Align2::LEFT_CENTER,
         );
     }
 
     // --- chips row
     let chip_y = rect.top() + PAD + isz + 8.0;
-    let mut chip_right = rect.right() - PAD;
+    let mut chip_x = rect.left() + PAD;
     let max_chip_w = width - PAD * 2.0;
     let chip_font = 11.0;
 
-    // Numeric id, rightmost chip: this is what the delete gate asks for.
+    // Numeric id, first chip: this is what the delete gate asks for.
     {
-        let r = widgets::chip_right(
+        let r = widgets::chip_left(
             ui,
-            chip_right,
+            chip_x,
             chip_y,
             &format!("#{}", app.id),
             p.text_faint,
@@ -122,14 +119,14 @@ pub fn card(
             chip_font,
             60.0,
         );
-        chip_right = r.left() - 6.0;
+        chip_x = r.right() + 6.0;
     }
 
     let size_text = human_size(app.size_bytes);
     if size_text != "—" {
-        let r = widgets::chip_right(
+        let r = widgets::chip_left(
             ui,
-            chip_right,
+            chip_x,
             chip_y,
             &size_text,
             p.text_dim,
@@ -141,12 +138,12 @@ pub fn card(
             chip_font,
             max_chip_w,
         );
-        chip_right = r.left() - 6.0;
+        chip_x = r.right() + 6.0;
     }
     if !app.version.is_empty() {
-        let r = widgets::chip_right(
+        let r = widgets::chip_left(
             ui,
-            chip_right,
+            chip_x,
             chip_y,
             &app.version,
             p.text_dim,
@@ -158,7 +155,7 @@ pub fn card(
             chip_font,
             max_chip_w,
         );
-        chip_right = r.left() - 6.0;
+        chip_x = r.right() + 6.0;
     }
     let src_bg = if app.is_system {
         p.warn_soft
@@ -166,9 +163,9 @@ pub fn card(
         p.accent_soft
     };
     let src_fg = if app.is_system { p.warn } else { p.accent_text };
-    let r = widgets::chip_right(
+    let r = widgets::chip_left(
         ui,
-        chip_right,
+        chip_x,
         chip_y,
         app.source.short(),
         src_fg,
@@ -176,11 +173,11 @@ pub fn card(
         chip_font,
         max_chip_w,
     );
-    chip_right = r.left() - 6.0;
+    chip_x = r.right() + 6.0;
     if app.is_system {
-        widgets::chip_right(
+        widgets::chip_left(
             ui,
-            chip_right,
+            chip_x,
             chip_y,
             "System",
             p.warn,
@@ -188,12 +185,12 @@ pub fn card(
             chip_font,
             max_chip_w,
         );
-        chip_right -= 44.0;
+        chip_x += 44.0;
     }
     if app.is_remnant() {
-        widgets::chip_right(
+        widgets::chip_left(
             ui,
-            chip_right,
+            chip_x,
             chip_y,
             "Remnant",
             p.danger,

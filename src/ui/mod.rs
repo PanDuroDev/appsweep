@@ -449,7 +449,7 @@ impl AppSweep {
             .show_separator_line(false)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    {
                         // Brand mark
                         let (r, _) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::hover());
                         ui.painter().rect_filled(r, CornerRadius::same(8), p.accent);
@@ -472,8 +472,28 @@ impl AppSweep {
                                 .font(FontId::proportional(11.5))
                                 .color(p.text_faint),
                         );
+                    }
 
-                        ui.add_space(14.0);
+                    // Search and navigation sit against the right edge.
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        // Added right to left, so the row reads: search, Scan,
+                        // Settings, Backups.
+                        if dialogs::nav_pill(ui, &p, "Backups", self.show_backups) {
+                            self.show_backups = !self.show_backups;
+                            if self.show_backups {
+                                self.backups = crate::actions::list_backups();
+                            }
+                        }
+
+                        if dialogs::nav_pill(ui, &p, "Settings", self.show_settings) {
+                            self.show_settings = !self.show_settings;
+                        }
+
+                        if self.scanning {
+                            ui.add(egui::Spinner::new().size(14.0));
+                        } else if dialogs::nav_pill(ui, &p, "Scan", false) {
+                            self.start_scan(ctx);
+                        }
 
                         // Search
                         let search_frame = Frame::NONE
@@ -494,23 +514,6 @@ impl AppSweep {
                                     .text_color(p.text),
                             );
                         });
-
-                        if self.scanning {
-                            ui.add(egui::Spinner::new().size(14.0));
-                        } else if dialogs::nav_pill(ui, &p, "Scan", false) {
-                            self.start_scan(ctx);
-                        }
-
-                        if dialogs::nav_pill(ui, &p, "Settings", self.show_settings) {
-                            self.show_settings = !self.show_settings;
-                        }
-
-                        if dialogs::nav_pill(ui, &p, "Backups", self.show_backups) {
-                            self.show_backups = !self.show_backups;
-                            if self.show_backups {
-                                self.backups = crate::actions::list_backups();
-                            }
-                        }
                     });
                 });
 
@@ -518,20 +521,18 @@ impl AppSweep {
 
                 // Filters
                 ui.horizontal(|ui| {
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        for f in [
-                            Filter::All,
-                            Filter::Desktop,
-                            Filter::Store,
-                            Filter::System,
-                            Filter::Favorites,
-                            Filter::Remnants,
-                        ] {
-                            if dialogs::nav_pill(ui, &p, f.label(), self.filter == f) {
-                                self.filter = f;
-                            }
+                    for f in [
+                        Filter::All,
+                        Filter::Desktop,
+                        Filter::Store,
+                        Filter::System,
+                        Filter::Favorites,
+                        Filter::Remnants,
+                    ] {
+                        if dialogs::nav_pill(ui, &p, f.label(), self.filter == f) {
+                            self.filter = f;
                         }
-                    });
+                    }
                 });
             });
     }
@@ -595,7 +596,9 @@ impl AppSweep {
                         },
                     );
 
-                    // Right block: counters.
+                    // Right block: counters. Laid out right to left so it ends
+                    // flush with the edge, which means the items are added in
+                    // reverse reading order: Admin, warnings, shown, total, size.
                     ui.allocate_ui_with_layout(
                         vec2(440.0, 26.0),
                         Layout::right_to_left(Align::Center),
@@ -606,6 +609,15 @@ impl AppSweep {
                                         .font(FontId::proportional(11.0))
                                         .color(p.ok),
                                 );
+                            }
+                            if !self.warnings.is_empty() {
+                                ui.add_space(8.0);
+                                ui.label(
+                                    RichText::new(format!("{}", self.warnings.len()))
+                                        .font(FontId::proportional(11.0))
+                                        .color(p.warn),
+                                )
+                                .on_hover_text(self.warnings.join("\n"));
                             }
                             let visible = self.filtered().len();
                             ui.label(
@@ -636,15 +648,6 @@ impl AppSweep {
                                     .font(FontId::proportional(11.5))
                                     .color(p.text_dim),
                             );
-                            if !self.warnings.is_empty() {
-                                ui.add_space(8.0);
-                                ui.label(
-                                    RichText::new(format!("{}", self.warnings.len()))
-                                        .font(FontId::proportional(11.0))
-                                        .color(p.warn),
-                                )
-                                .on_hover_text(self.warnings.join("\n"));
-                            }
                         },
                     );
                 });

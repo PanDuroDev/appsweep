@@ -77,32 +77,52 @@ pub fn bidi_runs(text: &str) -> Vec<(bool, String)> {
 
 /// Paint a mixed Arabic/Latin string in the correct visual order.
 ///
-/// Runs are placed right-to-left inside `rect`, each run itself drawn left to
-/// right, which is what a reader of a right-to-left line expects.
+/// The direction comes from the first non-space run, so an English sentence
+/// with a Latin path in it stays left-aligned, while an Arabic name or path
+/// still reads right to left.
 pub fn bidi_line(ui: &Ui, rect: Rect, text: &str, font: FontId, color: Color32) {
     let runs = bidi_runs(text);
     if runs.is_empty() {
         return;
     }
-    let mut x = rect.right();
+    let rtl = runs
+        .iter()
+        .find(|(_, run)| !run.trim().is_empty())
+        .map(|(arabic, _)| *arabic)
+        .unwrap_or(false);
     let cy = rect.center().y;
-    for (_, run) in runs.iter().rev() {
+    let mut x = if rtl { rect.right() } else { rect.left() };
+    let ordered: Vec<&(bool, String)> = if rtl {
+        runs.iter().rev().collect()
+    } else {
+        runs.iter().collect()
+    };
+    for (_, run) in ordered {
         let galley = ui
             .painter()
             .layout_no_wrap(run.clone(), font.clone(), color);
         let w = galley.size().x;
-        if x - w < rect.left() {
+        let start = if rtl { x - w } else { x };
+        if start < rect.left() || start + w > rect.right() {
             // Out of room: paint what still fits and stop.
-            let avail = (x - rect.left()).max(0.0);
+            let avail = if rtl {
+                x - rect.left()
+            } else {
+                rect.right() - x
+            };
             if avail > 4.0 {
                 ui.painter()
-                    .galley(pos2(x - w, cy - galley.size().y * 0.5), galley, color);
+                    .galley(pos2(start, cy - galley.size().y * 0.5), galley, color);
             }
             break;
         }
         ui.painter()
-            .galley(pos2(x - w, cy - galley.size().y * 0.5), galley, color);
-        x -= w;
+            .galley(pos2(start, cy - galley.size().y * 0.5), galley, color);
+        if rtl {
+            x -= w;
+        } else {
+            x += w;
+        }
     }
 }
 
@@ -213,11 +233,11 @@ pub fn chip(ui: &mut Ui, text: &str, fg: Color32, bg: Color32) {
         .galley(rect.center() - galley.size() * 0.5, galley, fg);
 }
 
-/// Draw a chip whose right edge is at `right`, returns the rect it used.
+/// Draw a chip whose left edge is at `left`, returns the rect it used.
 #[allow(clippy::too_many_arguments)]
-pub fn chip_right(
+pub fn chip_left(
     ui: &Ui,
-    right: f32,
+    left: f32,
     top: f32,
     text: &str,
     fg: Color32,
@@ -242,7 +262,7 @@ pub fn chip_right(
     let galley = ui.painter().layout_job(job);
     let w = galley.size().x + 12.0;
     let h = galley.size().y + 6.0;
-    let rect = Rect::from_min_size(pos2(right - w, top), vec2(w, h));
+    let rect = Rect::from_min_size(pos2(left, top), vec2(w, h));
     ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
     ui.painter()
         .galley(rect.center() - galley.size() * 0.5, galley, fg);

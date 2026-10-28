@@ -8,7 +8,7 @@ use egui::{
     pos2, vec2, Align2, Color32, CornerRadius, FontId, Rect, Sense, Stroke, StrokeKind, Ui,
 };
 
-/// Column widths, measured from the right edge because the table is RTL.
+/// Column widths, measured from the left edge.
 struct Cols {
     name_w: f32,
     publisher_w: f32,
@@ -72,17 +72,17 @@ pub fn header(
     let color = p.text_faint;
     let _cy = rect.center().y;
 
-    let mut x = rect.right();
+    let mut x = rect.left();
     let mut col = |ui: &Ui, w: f32, label: &str| {
         if w <= 0.0 {
-            x -= w;
+            x += w;
             return;
         }
-        let r = Rect::from_min_max(pos2(x - w, rect.top()), pos2(x, rect.bottom()));
+        let r = Rect::from_min_max(pos2(x, rect.top()), pos2(x + w, rect.bottom()));
         if !label.is_empty() {
             widgets::bidi_line(ui, r.shrink2(vec2(10.0, 0.0)), label, font.clone(), color);
         }
-        x -= w;
+        x += w;
     };
 
     col(ui, c.name_w, sort_label);
@@ -94,14 +94,14 @@ pub fn header(
     col(ui, c.actions_w, "Actions");
 
     // Clickable zones for sorting.
-    let mut zone_x = rect.right();
+    let mut zone_x = rect.left();
     let mut hit: Option<&'static str> = None;
     let mut zone = |ui: &mut Ui, salt: &'static str, w: f32| {
         if w <= 0.0 {
-            zone_x -= w;
+            zone_x += w;
             return;
         }
-        let r = Rect::from_min_max(pos2(zone_x - w, rect.top()), pos2(zone_x, rect.bottom()));
+        let r = Rect::from_min_max(pos2(zone_x, rect.top()), pos2(zone_x + w, rect.bottom()));
         let resp = ui.interact(r, ui.auto_id_with(("sort", salt)), Sense::click());
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -111,7 +111,7 @@ pub fn header(
         if resp.clicked() {
             hit = Some(salt);
         }
-        zone_x -= w;
+        zone_x += w;
     };
     zone(ui, "name", c.name_w);
     zone(ui, "publisher", c.publisher_w);
@@ -172,15 +172,14 @@ pub fn row(
 
     let c = Cols::for_width(width);
     let cy = rect.center().y;
-    let mut x = rect.right();
+    let mut x = rect.left();
 
     // name column, with icon
     {
-        let r = Rect::from_min_max(pos2(x - c.name_w, rect.top()), pos2(x, rect.bottom()));
+        let r = Rect::from_min_max(pos2(x, rect.top()), pos2(x + c.name_w, rect.bottom()));
         let inner = r.shrink2(vec2(10.0, 0.0));
         let isz = (h - 14.0).clamp(16.0, 28.0);
-        let icon_rect =
-            Rect::from_min_size(pos2(inner.right() - isz, cy - isz * 0.5), vec2(isz, isz));
+        let icon_rect = Rect::from_min_size(pos2(inner.left(), cy - isz * 0.5), vec2(isz, isz));
         widgets::paint_icon(ui, ctx, app, icon_rect, (isz * 1.5) as u32);
         // Clicking the icon opens the full details sheet.
         if ui
@@ -195,18 +194,18 @@ pub fn row(
             act = Some(Act::Details(app.id));
         }
         let star_rect =
-            Rect::from_min_size(pos2(icon_rect.left() - 26.0, cy - 11.0), vec2(22.0, 22.0));
+            Rect::from_min_size(pos2(icon_rect.right() + 4.0, cy - 11.0), vec2(22.0, 22.0));
         if widgets::star(ui, ("tstar", app.id), star_rect, app.favorite, p).clicked() {
             act = Some(Act::Favorite(app.id));
         }
         let remnant = app.is_remnant();
-        // Numeric id badge, placed just left of the star so it reads as part of
+        // Numeric id badge, placed just right of the star so it reads as part of
         // the name cell. This is the id the permanent-delete gate asks for.
         let id_text = format!("#{}", app.id);
         let id_w = 34.0;
         let id_r = Rect::from_min_max(
-            pos2(star_rect.left() - id_w - 6.0, cy - 9.0),
-            pos2(star_rect.left() - 6.0, cy + 9.0),
+            pos2(star_rect.right() + 6.0, cy - 9.0),
+            pos2(star_rect.right() + 6.0 + id_w, cy + 9.0),
         );
         ui.painter().rect_filled(
             id_r,
@@ -225,8 +224,8 @@ pub fn row(
             p.text_faint,
         );
         let text_r = Rect::from_min_max(
-            pos2(inner.left(), cy - 10.0),
-            pos2(id_r.left() - 6.0, cy + 10.0),
+            pos2(id_r.right() + 6.0, cy - 10.0),
+            pos2(inner.right(), cy + 10.0),
         );
         widgets::text_fit(
             ui,
@@ -234,10 +233,10 @@ pub fn row(
             &app.name,
             theme::bold(13.5),
             p.text,
-            Align2::RIGHT_CENTER,
+            Align2::LEFT_CENTER,
         );
         if app.is_system {
-            let dot_c = pos2(text_r.left() + 3.0, cy);
+            let dot_c = pos2(text_r.right() - 3.0, cy);
             widgets::dot_at(ui, dot_c, p.warn);
         }
         if remnant {
@@ -247,27 +246,27 @@ pub fn row(
                 .layout_no_wrap(app.name.clone(), theme::bold(13.5), p.text)
                 .size()
                 .x;
-            let chip_right = (text_r.right() - name_w - 8.0).max(text_r.left() + 38.0);
-            widgets::chip_right(
+            let chip_left = text_r.left() + name_w + 8.0;
+            widgets::chip_left(
                 ui,
-                chip_right,
+                chip_left,
                 cy - 8.0,
                 "Remnant",
                 p.danger,
                 p.danger_soft,
                 10.0,
-                36.0,
+                70.0,
             );
         }
-        x -= c.name_w;
+        x += c.name_w;
     }
 
     let mut cell = |ui: &Ui, w: f32, text: &str, font: FontId, color: Color32| {
         if w <= 0.0 {
-            x -= w;
+            x += w;
             return;
         }
-        let r = Rect::from_min_max(pos2(x - w, rect.top()), pos2(x, rect.bottom()));
+        let r = Rect::from_min_max(pos2(x, rect.top()), pos2(x + w, rect.bottom()));
         if !text.is_empty() {
             widgets::text_fit(
                 ui,
@@ -275,10 +274,10 @@ pub fn row(
                 text,
                 font.clone(),
                 color,
-                Align2::RIGHT_CENTER,
+                Align2::LEFT_CENTER,
             );
         }
-        x -= w;
+        x += w;
     };
 
     cell(
@@ -312,7 +311,7 @@ pub fn row(
 
     // source chip
     {
-        let r = Rect::from_min_max(pos2(x - c.source_w, rect.top()), pos2(x, rect.bottom()));
+        let r = Rect::from_min_max(pos2(x, rect.top()), pos2(x + c.source_w, rect.bottom()));
         let (fg, bg) = if app.is_system {
             (p.warn, p.warn_soft)
         } else if app.source == crate::model::Source::Uwp {
@@ -327,18 +326,18 @@ pub fn row(
         );
         let w = galley.size().x + 12.0;
         let chip = Rect::from_center_size(
-            pos2(r.right() - 10.0 - w * 0.5, cy),
+            pos2(r.left() + 10.0 + w * 0.5, cy),
             vec2(w, galley.size().y + 6.0),
         );
         ui.painter().rect_filled(chip, 6, bg);
         ui.painter()
             .galley(chip.center() - galley.size() * 0.5, galley, fg);
-        x -= c.source_w;
+        x += c.source_w;
     }
 
     // action buttons
     {
-        let r = Rect::from_min_max(pos2(x - c.actions_w, rect.top()), pos2(x, rect.bottom()));
+        let r = Rect::from_min_max(pos2(x, rect.top()), pos2(x + c.actions_w, rect.bottom()));
         let bh = (h - 12.0).clamp(20.0, 28.0);
         let by = cy - bh * 0.5;
         let mut bx = r.left() + 8.0;

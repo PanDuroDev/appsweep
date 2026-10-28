@@ -69,17 +69,17 @@ fn modal_frame(p: &Palette) -> Frame {
 
 fn title(ui: &mut Ui, p: &Palette, text: &str) {
     ui.horizontal(|ui| {
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
             ui.label(RichText::new(text).font(theme::bold(18.0)).color(p.text));
         });
     });
 }
 
-/// Arabic label on the right, value (usually Latin or numeric) on its left.
+/// Field label on the left, value (often a Latin path or a number) on its right.
 fn field(ui: &mut Ui, p: &Palette, label: &str, value: &str, mono: bool) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
             ui.label(
                 RichText::new(label)
                     .font(FontId::proportional(12.5))
@@ -113,7 +113,7 @@ fn field(ui: &mut Ui, p: &Palette, label: &str, value: &str, mono: bool) {
 fn section(ui: &mut Ui, p: &Palette, text: &str) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
             ui.label(
                 RichText::new(text)
                     .font(theme::bold(12.5))
@@ -180,7 +180,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
         &st.app.name,
         theme::bold(15.0),
         p.text,
-        Align2::RIGHT_CENTER,
+        Align2::LEFT_CENTER,
     );
     let sub = st
         .app
@@ -198,7 +198,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
         &sub,
         FontId::monospace(11.0),
         p.text_dim,
-        Align2::RIGHT_CENTER,
+        Align2::LEFT_CENTER,
     );
     ui.add_space(8.0);
 
@@ -240,7 +240,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
                         if resp.hovered() {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
-                        let dot_c = pos2(r.right() - 18.0, r.center().y);
+                        let dot_c = pos2(r.left() + 18.0, r.center().y);
                         ui.painter().circle_stroke(
                             dot_c,
                             7.0,
@@ -250,15 +250,15 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
                             ui.painter().circle_filled(dot_c, 4.0, p.accent);
                         }
                         let lr = Rect::from_min_max(
-                            pos2(r.left() + 12.0, r.top() + 8.0),
-                            pos2(r.right() - 34.0, r.top() + 28.0),
+                            pos2(r.left() + 34.0, r.top() + 8.0),
+                            pos2(r.right() - 12.0, r.top() + 28.0),
                         );
-                        text_fit(ui, lr, label, theme::bold(13.5), p.text, Align2::RIGHT_CENTER);
+                        text_fit(ui, lr, label, theme::bold(13.5), p.text, Align2::LEFT_CENTER);
                         let dr = Rect::from_min_max(
-                            pos2(r.left() + 12.0, r.top() + 28.0),
-                            pos2(r.right() - 34.0, r.top() + 48.0),
+                            pos2(r.left() + 34.0, r.top() + 28.0),
+                            pos2(r.right() - 12.0, r.top() + 48.0),
                         );
-                        text_fit(ui, dr, desc, FontId::proportional(11.5), p.text_dim, Align2::RIGHT_CENTER);
+                        text_fit(ui, dr, desc, FontId::proportional(11.5), p.text_dim, Align2::LEFT_CENTER);
                         if resp.clicked() {
                             st.flow = flow;
                         }
@@ -270,7 +270,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 ui.checkbox(
                     &mut st.auto_cascade,
                     "Try the other methods automatically when one fails",
@@ -278,7 +278,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
             });
         });
         ui.horizontal(|ui| {
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 ui.checkbox(&mut st.keep_data, "Keep user data when possible");
             });
         });
@@ -342,8 +342,8 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
     ];
     for (i, (t, d)) in steps.iter().enumerate() {
         ui.horizontal(|ui| {
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let c = pos2(ui.cursor().right() - 10.0, ui.cursor().top() + 9.0);
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                let c = pos2(ui.cursor().left() + 10.0, ui.cursor().top() + 9.0);
                 ui.painter().circle_filled(c, 8.0, p.accent_soft);
                 ui.painter().text(
                     c,
@@ -366,7 +366,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
 
     ui.add_space(10.0);
     ui.horizontal(|ui| {
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
             let ack_text = if danger {
                 "I understand this deletion is permanent and cannot be undone"
             } else {
@@ -384,7 +384,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
     if danger {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 ui.label(
                     RichText::new("Type the ID number to confirm")
                         .font(FontId::proportional(11.5))
@@ -537,7 +537,7 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
                     Color32::TRANSPARENT
                 };
                 ui.painter().rect_filled(r, 7, bg);
-                let ic = pos2(r.right() - 16.0, r.center().y);
+                let ic = pos2(r.left() + 16.0, r.center().y);
                 ui.painter()
                     .circle_filled(ic, 9.0, col.gamma_multiply(0.22));
                 ui.painter().text(
@@ -548,8 +548,8 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
                     col,
                 );
                 let tr = Rect::from_min_max(
-                    pos2(r.left() + 10.0, r.top() + 4.0),
-                    pos2(r.right() - 32.0, r.top() + 21.0),
+                    pos2(r.left() + 32.0, r.top() + 4.0),
+                    pos2(r.right() - 10.0, r.top() + 21.0),
                 );
                 text_fit(
                     ui,
@@ -557,11 +557,11 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
                     &st.title,
                     theme::bold(12.5),
                     p.text,
-                    Align2::RIGHT_CENTER,
+                    Align2::LEFT_CENTER,
                 );
                 let dr = Rect::from_min_max(
-                    pos2(r.left() + 10.0, r.top() + 20.0),
-                    pos2(r.right() - 32.0, r.top() + 36.0),
+                    pos2(r.left() + 32.0, r.top() + 20.0),
+                    pos2(r.right() - 10.0, r.top() + 36.0),
                 );
                 let detail = &st.detail;
                 // Details often embed Latin paths, so they need the bidi-aware
@@ -630,19 +630,19 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
     ui.set_width(600.0);
 
     ui.horizontal(|ui| {
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
             let (r, _) = ui.allocate_exact_size(vec2(56.0, 56.0), Sense::hover());
             widgets::paint_icon(ui, ctx, app, r, 84);
             ui.add_space(10.0);
             ui.vertical(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.label(
                         RichText::new(&app.name)
                             .font(theme::bold(17.0))
                             .color(p.text),
                     );
                 });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     let src = if app.is_remnant() {
                         "Remnants of an incomplete uninstall"
                     } else if app.is_system {
@@ -772,7 +772,7 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
             // Elevation state matters here: a non-admin run may fail to delete.
             if !ctx.elevated {
                 ui.add_space(4.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.label(
                         RichText::new("Without administrator rights")
                             .font(FontId::proportional(11.5))
@@ -902,7 +902,7 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
         .show(ui, |ui| {
             section(ui, p, "Appearance");
             ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.label(RichText::new("Mode").color(p.text_dim));
                     for (m, l) in [(ThemeMode::Light, "Light"), (ThemeMode::Dark, "Dark")] {
                         let sel = s.theme == m;
@@ -927,7 +927,7 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
             });
 
             ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.label(RichText::new("Accent color").color(p.text_dim));
                     for a in Accent::ALL {
                         let (r, g, b) = a.rgb();
@@ -954,7 +954,7 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
             });
 
             ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.label(RichText::new("Density").color(p.text_dim));
                     for d in [Density::Compact, Density::Normal, Density::Relaxed] {
                         let sel = s.density == d;
@@ -979,7 +979,7 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
             });
 
             ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.label(RichText::new("View").color(p.text_dim));
                     for (v, l) in [(ViewMode::Cards, "Cards"), (ViewMode::Table, "Table")] {
                         let sel = s.view == v;
@@ -1005,40 +1005,39 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
 
             if s.view == ViewMode::Cards {
                 ui.horizontal(|ui| {
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.add(
-                            egui::Slider::new(&mut s.card_min_width, 220.0..=460.0)
-                                .text("Card width"),
-                        );
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        ui.label(RichText::new("Card width").color(p.text_dim));
+                        ui.add(egui::Slider::new(&mut s.card_min_width, 220.0..=460.0));
                     });
                 });
             }
             ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.add(egui::Slider::new(&mut s.icon_size, 28.0..=96.0).text("Icon size"));
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.label(RichText::new("Icon size").color(p.text_dim));
+                    ui.add(egui::Slider::new(&mut s.icon_size, 28.0..=96.0));
                 });
             });
 
             section(ui, p, "Shown in the list");
             ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.checkbox(&mut s.show_system, "Show system apps");
                 });
             });
             ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.checkbox(&mut s.show_frameworks, "Show shared runtimes");
                 });
             });
             ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.checkbox(&mut s.show_shortcuts, "Show unlinked shortcuts");
                 });
             });
 
             section(ui, p, "Deletion behavior");
             ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.checkbox(
                         &mut s.auto_cascade,
                         "Try every method automatically on failure",
@@ -1046,7 +1045,7 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
                 });
             });
             ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.checkbox(
                         &mut s.create_restore_point,
                         "Create a restore point before deleting",
@@ -1054,24 +1053,24 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
                 });
             });
             ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.checkbox(&mut s.backup_registry, "Back up the registry key");
                 });
             });
             ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.checkbox(&mut s.kill_processes, "Close the app before deleting");
                 });
             });
 
             section(ui, p, "General");
             ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.checkbox(&mut s.scan_on_start, "Scan on startup");
                 });
             });
             ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.label(RichText::new("Sort by").color(p.text_dim));
                     egui::ComboBox::from_id_salt("sortkey")
                         .selected_text(s.sort.label())
@@ -1094,7 +1093,7 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.label(
                         RichText::new(format!(
                             "Settings saved in: {}",
@@ -1223,9 +1222,8 @@ pub fn backups(
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let total = crate::actions::backups_size();
-            // Never concatenate digits into an Arabic string: epaint has no
-            // bidi reordering, so each part gets its own widget. Widgets are
-            // added right-to-left, so the number comes before its noun.
+            // epaint has no bidi reordering, so a number and its noun are
+            // separate widgets here: each part keeps its own direction.
             ui.label(
                 RichText::new(format!("{}", items.len()))
                     .font(FontId::monospace(11.5))
@@ -1286,10 +1284,10 @@ pub fn backups(
                         StrokeKind::Inside,
                     );
 
-                    // Name (Latin, left of the row) and metadata.
+                    // File name on the left of the row, actions on the right.
                     let name_r = Rect::from_min_max(
-                        pos2(r.left() + 150.0, r.top() + 4.0),
-                        pos2(r.right() - 12.0, r.top() + 21.0),
+                        pos2(r.left() + 12.0, r.top() + 4.0),
+                        pos2(r.right() - 150.0, r.top() + 21.0),
                     );
                     widgets::text_fit(
                         ui,
@@ -1297,11 +1295,11 @@ pub fn backups(
                         &b.file,
                         FontId::proportional(12.0),
                         p.text,
-                        Align2::RIGHT_CENTER,
+                        Align2::LEFT_CENTER,
                     );
                     let meta_r = Rect::from_min_max(
-                        pos2(r.left() + 150.0, r.top() + 20.0),
-                        pos2(r.right() - 12.0, r.top() + 37.0),
+                        pos2(r.left() + 12.0, r.top() + 20.0),
+                        pos2(r.right() - 150.0, r.top() + 37.0),
                     );
                     widgets::text_fit(
                         ui,
@@ -1309,11 +1307,11 @@ pub fn backups(
                         &format!("{}  ·  {}", b.modified, human_size(b.size)),
                         FontId::proportional(10.5),
                         p.text_faint,
-                        Align2::RIGHT_CENTER,
+                        Align2::LEFT_CENTER,
                     );
 
                     let del = Rect::from_min_size(
-                        pos2(r.left() + 10.0, r.center().y - 12.0),
+                        pos2(r.right() - 68.0, r.center().y - 12.0),
                         vec2(58.0, 24.0),
                     );
                     if widgets::pill(
@@ -1332,7 +1330,7 @@ pub fn backups(
                     }
 
                     let imp = Rect::from_min_size(
-                        pos2(r.left() + 76.0, r.center().y - 12.0),
+                        pos2(r.right() - 140.0, r.center().y - 12.0),
                         vec2(64.0, 24.0),
                     );
                     if widgets::pill(
