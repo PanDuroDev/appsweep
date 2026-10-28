@@ -180,3 +180,93 @@ impl Settings {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_keep_the_safety_nets_on() {
+        let s = Settings::default();
+        assert!(s.backup_registry);
+        assert!(s.create_restore_point);
+        assert!(s.kill_processes);
+        assert!(s.auto_cascade);
+        // Listing system apps was an explicit requirement.
+        assert!(s.show_system);
+        assert_eq!(s.theme, ThemeMode::Dark);
+        assert_eq!(s.accent, Accent::Blue);
+        assert!(!s.sort_desc);
+        assert!((24.0..=96.0).contains(&s.icon_size));
+        assert!(s.card_min_width >= 240.0);
+    }
+
+    #[test]
+    fn every_field_survives_a_json_round_trip() {
+        let s = Settings {
+            theme: ThemeMode::Light,
+            accent: Accent::Green,
+            density: Density::Compact,
+            view: ViewMode::Table,
+            card_min_width: 412.0,
+            icon_size: 64.0,
+            show_system: false,
+            show_frameworks: true,
+            show_shortcuts: false,
+            sort: SortKey::Size,
+            sort_desc: true,
+            auto_cascade: false,
+            create_restore_point: false,
+            backup_registry: false,
+            kill_processes: false,
+            scan_on_start: false,
+            confirm_text: "x".into(),
+            last_folder: "D:\\Apps".into(),
+        };
+        let text = serde_json::to_string(&s).unwrap();
+        let back: Settings = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.theme, s.theme);
+        assert_eq!(back.accent, s.accent);
+        assert_eq!(back.density, s.density);
+        assert_eq!(back.view, s.view);
+        assert_eq!(back.card_min_width, s.card_min_width);
+        assert_eq!(back.icon_size, s.icon_size);
+        assert_eq!(back.show_system, s.show_system);
+        assert_eq!(back.show_frameworks, s.show_frameworks);
+        assert_eq!(back.show_shortcuts, s.show_shortcuts);
+        assert_eq!(back.sort, s.sort);
+        assert_eq!(back.sort_desc, s.sort_desc);
+        assert_eq!(back.auto_cascade, s.auto_cascade);
+        assert_eq!(back.create_restore_point, s.create_restore_point);
+        assert_eq!(back.backup_registry, s.backup_registry);
+        assert_eq!(back.kill_processes, s.kill_processes);
+        assert_eq!(back.scan_on_start, s.scan_on_start);
+        assert_eq!(back.confirm_text, s.confirm_text);
+        assert_eq!(back.last_folder, s.last_folder);
+    }
+
+    #[test]
+    fn a_broken_settings_file_is_rejected_not_half_applied() {
+        // `load` falls back to `default()` when parsing fails, so every one of
+        // these must be an error rather than a partly-filled struct.
+        assert!(serde_json::from_str::<Settings>("{}").is_err());
+        assert!(serde_json::from_str::<Settings>("not json").is_err());
+        assert!(serde_json::from_str::<Settings>(r#"{"theme":"Neon"}"#).is_err());
+    }
+
+    #[test]
+    fn density_and_accent_tables_are_complete() {
+        assert!(Density::Compact.row_height() < Density::Normal.row_height());
+        assert!(Density::Normal.row_height() < Density::Relaxed.row_height());
+        assert!(Density::Compact.spacing() < Density::Relaxed.spacing());
+        for d in [Density::Compact, Density::Normal, Density::Relaxed] {
+            assert!(!d.label_ar().is_empty());
+        }
+        let mut seen = std::collections::HashSet::new();
+        for a in Accent::ALL {
+            assert!(seen.insert(a.rgb()), "duplicate accent colour");
+            assert!(!a.label_ar().is_empty());
+        }
+        assert_eq!(seen.len(), Accent::ALL.len());
+    }
+}

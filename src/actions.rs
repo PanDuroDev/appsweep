@@ -388,7 +388,12 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
         });
     };
 
-    let dir = app.install_dir.clone();
+    // A protected folder must not reach any op at all, not just the delete
+    // ones: killing the processes of "C:\Windows" would take the session down.
+    let dir = app
+        .install_dir
+        .clone()
+        .filter(|d| !crate::model::is_protected_dir(d));
     // "Keep user data" means: only touch the program folder, never the
     // AppData / ProgramData leftovers that hold the user's own files.
     let traces = if keep_data {
@@ -1513,5 +1518,158 @@ pub fn selftest() -> i32 {
     } else {
         println!("SELFTEST FAILED");
         1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app(name: &str, dir: &str) -> AppEntry {
+        let mut a = AppEntry::new(1, name.to_string(), Source::Registry);
+        a.install_dir = Some(PathBuf::from(dir));
+        a
+    }
+
+    fn any_op(steps: &[Step], f: impl Fn(&Op) -> bool) -> bool {
+        steps.iter().any(|s| f(&s.op))
+    }
+
+    #[test]
+    fn names_are_compared_without_case_or_punctuation() {
+        assert_eq!(norm("Carrots-Engine 1.0"), "carrotsengine10");
+        assert_eq!(norm("  AppSweep!! "), "appsweep");
+    }
+
+    #[test]
+    fn generic_words_are_dropped_before_matching() {
+        assert_eq!(
+            tokens("Microsoft Windows Application Verifier x64"),
+            vec!["verifier"]
+        );
+        assert_eq!(tokens("Roblox Player"), vec!["roblox", "player"]);
+        assert!(tokens("App Update Setup x86").is_empty());
+    }
+
+    #[test]
+    fn trace_matching_needs_a_distinctive_name_word() {
+        assert!(!looks_like_trace("", &app("Carrots Engine", "D:\\CE")));
+        assert!(looks_like_trace(
+            "Carrots Engine",
+            &app("Carrots Engine", "D:\\CE")
+        ));
+        assert!(looks_like_trace(
+            "CarrotsEngine",
+            &app("Carrots Engine", "D:\\CE")
+        ));
+        // A publisher hit alone is too loose: every app by the same vendor
+        // would lose its data folder.
+        let mut a = app("Demo Tool", "D:\\demo");
+        a.publisher = "Acme".into();
+        assert!(looks_like_trace("Acme Demo", &a));
+        assert!(!looks_like_trace("Acme Games", &a));
+        assert!(!looks_like_trace("Unrelated", &a));
+    }
+
+    #[test]
+    fn protected_paths_never_reach_the_delete_engine() {
+        let kept = safe_paths(vec![
+            "C:\\Program Files".to_string(),
+            "C:\\Windows\\System32".to_string(),
+            "C:\\".to_string(),
+            "D:\\Apps\\Demo".to_string(),
+        ]);
+        assert_eq!(kept, vec!["D:\\Apps\\Demo".to_string()]);
+    }
+
+    #[test]
+    fn files_only_touches_the_folder() {
+        let a = app("Demo", "D:\\Apps\\Demo");
+        let steps = build_plan(&a, Flow::FilesOnly, &Settings::default(), true);
+        assert!(any_op(&steps, |o| matches!(o, Op::Recycle { .. })));
+        assert!(any_op(&steps, |o| matches!(o, Op::ForceDelete { .. })));
+        assert!(any_op(&steps, |o| matches!(o, Op::Verify { .. })));
+        assert!(!any_op(&steps, |o| matches!(o, Op::DeleteReg { .. })));
+        assert!(!any_op(&steps, |o| matches!(o, Op::DeleteShortcuts { .. })));
+    }
+
+    #[test]
+    fn purge_removes_the_registry_entry_shortcuts_and_the_folder() {
+        let mut a = app("Demo", "D:\\Apps\\Demo");
+        a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
+        a.shortcuts = vec![PathBuf::from("D:\\Start\\Demo.lnk")];
+        let steps = build_plan(&a, Flow::Purge, &Settings::default(), true);
+        assert!(any_op(
+            &steps,
+            |o| matches!(o, Op::DeleteReg { keys } if !keys.is_empty())
+        ));
+        assert!(any_op(&steps, |o| matches!(o, Op::DeleteShortcuts { .. })));
+        assert!(any_op(&steps, |o| matches!(
+            o,
+            Op::ForceDelete { paths } if paths.iter().any(|p| p.contains("Demo"))
+        )));
+        assert!(any_op(&steps, |o| matches!(o, Op::Verify { .. })));
+    }
+
+    #[test]
+    fn a_backup_is_taken_before_any_registry_deletion() {
+        let mut a = app("Demo", "D:\\Apps\\Demo");
+        a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
+        let steps = build_plan(&a, Flow::Purge, &Settings::default(), true);
+        let backup = steps
+            .iter()
+            .position(|s| matches!(s.op, Op::BackupRegistry { .. }));
+        let delete = steps
+            .iter()
+            .position(|s| matches!(s.op, Op::DeleteReg { .. }));
+        if let (Some(b), Some(d)) = (backup, delete) {
+            assert!(b < d, "registry must be exported before it is deleted");
+        }
+    }
+
+    #[test]
+    fn no_plan_ever_contains_a_protected_directory() {
+        for (name, dir) in [
+            ("Windows", "C:\\Windows"),
+            ("System32", "C:\\Windows\\System32"),
+            ("ProgramFiles", "C:\\Program Files"),
+            ("Root", "C:\\"),
+        ] {
+            let a = app(name, dir);
+            for flow in [Flow::Uninstall, Flow::Purge, Flow::FilesOnly] {
+                let steps = build_plan(&a, flow, &Settings::default(), true);
+                for s in &steps {
+                    let paths: Vec<&String> = match &s.op {
+                        Op::ForceDelete { paths }
+                        | Op::Recycle { paths }
+                        | Op::DeleteShortcuts { paths }
+                        | Op::DeleteOnReboot { paths } => paths.iter().collect(),
+                        Op::KillProcesses { path } => vec![path],
+                        _ => Vec::new(),
+                    };
+                    for p in paths {
+                        assert!(
+                            !crate::model::is_protected_dir(Path::new(p)),
+                            "{} leaked into {:?}",
+                            p,
+                            flow
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_flow_has_a_title() {
+        for flow in [Flow::Uninstall, Flow::Purge, Flow::FilesOnly] {
+            assert!(!flow.title_ar().is_empty());
+        }
+    }
+
+    #[test]
+    fn backup_timestamps_are_readable_utc() {
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        assert_eq!(format_time(t), "2023-11-14 22:13");
     }
 }

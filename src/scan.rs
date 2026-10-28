@@ -1100,4 +1100,82 @@ mod tests {
             assert_eq!(arch, Arch::X64);
         }
     }
+
+    #[test]
+    fn commands_split_into_executable_and_arguments() {
+        assert_eq!(
+            split_command("\"C:\\Program Files\\App\\uninst.exe\" /S /quiet"),
+            (
+                "C:\\Program Files\\App\\uninst.exe".to_string(),
+                "/S /quiet".to_string()
+            )
+        );
+        assert_eq!(
+            split_command("C:\\Tools\\setup.exe /silent"),
+            ("C:\\Tools\\setup.exe".to_string(), "/silent".to_string())
+        );
+        assert_eq!(
+            split_command("\"C:\\Tools\\a.exe\""),
+            ("C:\\Tools\\a.exe".to_string(), String::new())
+        );
+        assert_eq!(
+            split_command("C:\\Tools\\a.exe"),
+            ("C:\\Tools\\a.exe".to_string(), String::new())
+        );
+        assert_eq!(split_command("  "), (String::new(), String::new()));
+    }
+
+    #[test]
+    fn msi_product_codes_are_extracted() {
+        let guid = "{1A2B3C4D-0000-1111-2222-333344445555}";
+        let cmd = format!("MsiExec.exe /I{}", guid);
+        assert_eq!(msi_product_from(&cmd).as_deref(), Some(guid));
+        assert_eq!(msi_product_from("C:\\app\\uninstall.exe"), None);
+        // A truncated brace pair must not be mistaken for a product code.
+        assert_eq!(msi_product_from("msiexec /I{1234}"), None);
+    }
+
+    #[test]
+    fn install_dates_are_normalised() {
+        assert_eq!(parse_date("20240115"), "2024-01-15");
+        assert_eq!(parse_date("2024/01/15"), "2024-01-15");
+        assert_eq!(parse_date(""), "");
+        assert_eq!(parse_date("2024"), "");
+    }
+
+    #[test]
+    fn paths_are_compared_case_and_separator_insensitively() {
+        assert!(is_under(
+            "C:/Program Files/App/bin",
+            "c:\\program files\\app"
+        ));
+        assert!(!is_under("C:\\Other", "C:\\Program Files"));
+    }
+
+    #[test]
+    fn store_logo_uris_become_relative_paths() {
+        assert_eq!(
+            ms_appx_relative("ms-appx://Package/Assets/Logo.png").as_deref(),
+            Some("Assets\\Logo.png")
+        );
+        assert_eq!(ms_appx_relative("ms-resource:AppName"), None);
+        assert_eq!(
+            ms_appx_relative("C:\\Assets\\logo.png").as_deref(),
+            Some("C:\\Assets\\logo.png")
+        );
+        assert_eq!(ms_appx_relative("logo.png"), None);
+    }
+
+    #[test]
+    fn windows_folders_are_flagged_as_system() {
+        let win = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+        assert!(is_system_path(Path::new(&format!(
+            "{}\\System32\\calc.exe",
+            win
+        ))));
+        assert!(!is_system_path(Path::new("D:\\Apps\\Demo")));
+        assert!(!is_system_path(Path::new(
+            "C:\\Program Files\\WindowsApps\\App"
+        )));
+    }
 }

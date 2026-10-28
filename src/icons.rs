@@ -117,3 +117,16 @@ pub fn app_data_dir() -> PathBuf {
         .unwrap_or_else(|| home_dir().join("AppData\\Roaming"))
         .join("AppSweep")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_and_backups_live_under_one_owned_folder() {
+        let d = app_data_dir();
+        assert!(d.is_absolute());
+        assert_eq!(d.file_name().unwrap(), "AppSweep");
+        assert!(app_data_dir().join("backups").starts_with(&d));
+    }
+}

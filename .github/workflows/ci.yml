@@ -1,10 +1,16 @@
 name: ci
 
 on:
+  # Every branch, every push: an edit is only checked once it is pushed.
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
+
+concurrency:
+  # A newer push to the same branch cancels the run it superseded, so quick
+  # successive edits never queue minutes of stale builds.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always

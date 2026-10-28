@@ -285,3 +285,53 @@ pub fn load_fonts(ctx: &egui::Context) {
 
     ctx.set_fonts(fonts);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_accent_is_the_colour_that_was_asked_for() {
+        for a in Accent::ALL {
+            let (r, g, b) = a.rgb();
+            let p = Palette::new(ThemeMode::Dark, a);
+            assert_eq!(p.accent, Color32::from_rgb(r, g, b));
+        }
+    }
+
+    #[test]
+    fn dark_and_light_are_actually_inverted() {
+        let d = Palette::new(ThemeMode::Dark, Accent::Blue);
+        let l = Palette::new(ThemeMode::Light, Accent::Blue);
+        assert!(d.dark);
+        assert!(!l.dark);
+        assert_ne!(d.bg, l.bg);
+        assert_ne!(d.card, l.card);
+        assert_ne!(d.text, l.text);
+        // A swapped palette would make the whole UI unreadable.
+        assert!(d.text.r() > 128);
+        assert!(l.text.r() < 128);
+    }
+
+    #[test]
+    fn status_colours_do_not_collide() {
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            let p = Palette::new(mode, Accent::Blue);
+            assert_ne!(p.danger, p.warn);
+            assert_ne!(p.warn, p.ok);
+            assert_ne!(p.danger, p.ok);
+            assert_ne!(p.text, p.text_dim);
+            assert_ne!(p.text_dim, p.text_faint);
+            assert_ne!(p.card, p.card_hover);
+        }
+    }
+
+    #[test]
+    fn accent_text_is_brighter_than_the_fill_in_dark_mode() {
+        for a in Accent::ALL {
+            let p = Palette::new(ThemeMode::Dark, a);
+            assert!(p.accent_text.r() >= p.accent.r());
+            assert!(p.accent_text.g() >= p.accent.g());
+        }
+    }
+}

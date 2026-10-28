@@ -317,3 +317,52 @@ pub fn card_rect_style(ui: &mut Ui, ctx: &Ctx, w: f32, h: f32, selected: bool) -
     );
     (rect, resp)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arabic_ranges_are_recognised() {
+        assert!(is_arabic('ح'));
+        assert!(is_arabic('\u{0660}'));
+        assert!(is_arabic('\u{FE8F}'));
+        assert!(!is_arabic('A'));
+        assert!(!is_arabic(':'));
+        assert!(!is_arabic('\\'));
+    }
+
+    #[test]
+    fn pure_text_is_a_single_run() {
+        assert_eq!(bidi_runs("حذف كامل"), vec![(true, "حذف كامل".to_string())]);
+        assert_eq!(bidi_runs("AppSweep"), vec![(false, "AppSweep".to_string())]);
+        assert!(bidi_runs("").is_empty());
+    }
+
+    #[test]
+    fn runs_always_rebuild_the_original_string() {
+        // Each run is painted separately, so a dropped or reordered character
+        // here would silently corrupt every mixed label and path.
+        for s in [
+            "المسار C:\\Program Files\\App",
+            "تم حذف 5 عناصر",
+            "C:\\tmp\\ملف.txt",
+            "حذف نهائي الآن",
+            "#449",
+        ] {
+            let joined: String = bidi_runs(s).iter().map(|(_, t)| t.as_str()).collect();
+            assert_eq!(joined, s);
+        }
+    }
+
+    #[test]
+    fn a_latin_path_inside_arabic_stays_one_whole_run() {
+        let runs = bidi_runs("المسار C:\\App\\demo.exe");
+        let latin: Vec<&str> = runs
+            .iter()
+            .filter(|(arabic, _)| !*arabic)
+            .map(|(_, text)| text.as_str())
+            .collect();
+        assert_eq!(latin, vec!["C:\\App\\demo.exe"]);
+    }
+}

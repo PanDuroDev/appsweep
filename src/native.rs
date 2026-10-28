@@ -353,3 +353,17 @@ pub fn ensure_dir(path: &str) -> i32 {
     let w = wide(path);
     unsafe { as_ensure_dir(w.as_ptr()) }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wide_strings_are_nul_terminated_utf16() {
+        assert_eq!(wide("ab"), vec![0x61, 0x62, 0]);
+        assert_eq!(wide(""), vec![0]);
+        assert_eq!(wide("ا"), vec![0x0627, 0]);
+        // Non-BMP characters must become a surrogate pair, not be dropped.
+        assert_eq!(wide("😀"), vec![0xD83D, 0xDE00, 0]);
+    }
+}

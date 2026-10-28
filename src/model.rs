@@ -341,4 +341,29 @@ mod tests {
         e.install_dir = Some(std::env::temp_dir());
         assert!(!e.is_remnant());
     }
+
+    #[test]
+    fn every_enum_variant_has_a_label() {
+        for a in [Arch::X64, Arch::X86, Arch::Arm64, Arch::Neutral] {
+            assert!(!a.text().is_empty());
+        }
+        for s in [Source::Registry, Source::Uwp, Source::Shortcut] {
+            assert!(!s.label_ar().is_empty());
+            assert!(!s.short_ar().is_empty());
+        }
+        assert_eq!(RegRoot::Hklm.label(), "HKLM");
+        assert_eq!(RegRoot::Hklm32.label(), "HKLM-32");
+        assert_eq!(RegRoot::Hkcu.label(), "HKCU");
+    }
+
+    #[test]
+    fn a_new_entry_starts_empty_but_complete() {
+        let e = AppEntry::new(7, "Demo".into(), Source::Registry);
+        assert_eq!(e.id, 7);
+        assert!(!e.hidden && !e.favorite && !e.is_system && !e.is_framework);
+        assert!(e.shortcuts.is_empty() && e.traces.is_empty());
+        assert!(e.notes.is_empty() && e.package_full_name.is_none());
+        assert_eq!(e.arch, Arch::Neutral);
+        assert_eq!(e.reveal_path(), None);
+    }
 }
