@@ -1,0 +1,1549 @@
+use crate::model::{AppEntry, RegRoot, Source};
+use crate::settings::Settings;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::thread;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Flow {
+    /// Official uninstaller, with fallbacks.
+    Uninstall,
+    /// Remove every file, registry key, service and trace.
+    Purge,
+    /// Only delete the program folder.
+    FilesOnly,
+}
+
+impl Flow {
+    pub fn title_ar(&self) -> &'static str {
+        match self {
+            Flow::Uninstall => "إزالة التطبيق",
+            Flow::Purge => "حذف نهائي بكل الجذور",
+            Flow::FilesOnly => "حذف الملفات فقط",
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum StepStatus {
+    Pending,
+    Running,
+    Ok,
+    Warn,
+    Fail,
+    Skip,
+}
+
+#[derive(Clone, Debug)]
+pub struct Step {
+    pub title: String,
+    pub detail: String,
+    pub status: StepStatus,
+    pub op: Op,
+    pub skip_if_gone: bool,
+    pub optional: bool,
+}
+
+#[derive(Clone, Debug)]
+pub enum Op {
+    Nothing,
+    KillProcesses {
+        path: String,
+    },
+    RestorePoint {
+        desc: String,
+    },
+    BackupRegistry {
+        root: RegRoot,
+        key: String,
+    },
+    RunUninstaller {
+        cmd: String,
+    },
+    RunMsi {
+        product: String,
+    },
+    RunWinget {
+        name: String,
+    },
+    RemoveUwp {
+        full_name: String,
+    },
+    ForceDelete {
+        paths: Vec<String>,
+    },
+    Recycle {
+        paths: Vec<String>,
+    },
+    DeleteReg {
+        keys: Vec<(RegRoot, String)>,
+    },
+    DeleteShortcuts {
+        paths: Vec<String>,
+    },
+    DeleteServices {
+        names: Vec<String>,
+    },
+    DeleteTasks {
+        names: Vec<String>,
+    },
+    DeleteOnReboot {
+        paths: Vec<String>,
+    },
+    Verify {
+        paths: Vec<String>,
+    },
+    CleanTemp,
+}
+
+pub struct Job {
+    pub app_id: u64,
+    pub app_name: String,
+    pub flow: Flow,
+    pub steps: Vec<Step>,
+    pub done: bool,
+    pub summary: String,
+    pub success: bool,
+    rx: Receiver<(usize, StepStatus, String)>,
+}
+
+impl Job {
+    pub fn poll(&mut self) -> bool {
+        let mut changed = false;
+        let total = self.steps.len();
+        loop {
+            match self.rx.try_recv() {
+                Ok((idx, status, detail)) => {
+                    if idx >= total {
+                        // Completion sentinel from the worker thread.
+                        self.mark_done();
+                    } else if let Some(s) = self.steps.get_mut(idx) {
+                        s.status = status;
+                        if !detail.is_empty() {
+                            s.detail = detail;
+                        }
+                    }
+                    changed = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // The worker thread died without sending the sentinel.
+                    // Never leave the dialog spinning forever.
+                    if !self.done {
+                        self.mark_done();
+                        changed = true;
+                    }
+                    break;
+                }
+            }
+        }
+        changed
+    }
+
+    fn mark_done(&mut self) {
+        self.done = true;
+        self.success = !self.steps.iter().any(|s| s.status == StepStatus::Fail);
+        let (ok, warn, fail) = self.steps.iter().fold((0, 0, 0), |mut acc, s| {
+            match s.status {
+                StepStatus::Ok => acc.0 += 1,
+                StepStatus::Warn => acc.1 += 1,
+                StepStatus::Fail => acc.2 += 1,
+                _ => {}
+            }
+            acc
+        });
+        self.summary = format!("نجح {} / تحذير {} / فشل {}", ok, warn, fail);
+        // Anything still marked Running never reported back.
+        for s in self.steps.iter_mut() {
+            if s.status == StepStatus::Running || s.status == StepStatus::Pending {
+                s.status = StepStatus::Fail;
+                if s.detail.is_empty() {
+                    s.detail = "توقفت الخطوة دون نتيجة".into();
+                }
+            }
+        }
+    }
+
+    pub fn progress(&self) -> (usize, usize) {
+        let done = self
+            .steps
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s.status,
+                    StepStatus::Ok | StepStatus::Warn | StepStatus::Fail | StepStatus::Skip
+                )
+            })
+            .count();
+        (done, self.steps.len())
+    }
+}
+
+// ---------------------------------------------------------------- helpers
+
+fn norm(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect()
+}
+
+fn stop_words() -> &'static [&'static str] {
+    &[
+        "microsoft",
+        "windows",
+        "software",
+        "corporation",
+        "corp",
+        "incorporated",
+        "inc",
+        "ltd",
+        "limited",
+        "llc",
+        "gmbh",
+        "technologies",
+        "technology",
+        "studio",
+        "studios",
+        "company",
+        "the",
+        "for",
+        "and",
+        "app",
+        "apps",
+        "update",
+        "setup",
+        "installer",
+        "version",
+        "x64",
+        "x86",
+        "arm64",
+        "desktop",
+        "application",
+        "official",
+        "team",
+        "project",
+        "project64",
+    ]
+}
+
+fn tokens(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for c in s.chars() {
+        if c.is_alphanumeric() {
+            cur.push(c.to_ascii_lowercase());
+        } else if !cur.is_empty() {
+            if cur.len() >= 3 && !stop_words().contains(&cur.as_str()) {
+                out.push(cur.clone());
+            }
+            cur.clear();
+        }
+    }
+    if cur.len() >= 3 && !stop_words().contains(&cur.as_str()) {
+        out.push(cur);
+    }
+    out
+}
+
+fn looks_like_trace(dir_name: &str, app: &AppEntry) -> bool {
+    let cand = norm(dir_name);
+    if cand.is_empty() || cand.len() < 3 {
+        return false;
+    }
+    let app_norm = norm(&app.name);
+    if !app_norm.is_empty() && cand == app_norm {
+        return true;
+    }
+    if app_norm.len() >= 4 && cand.contains(&app_norm) {
+        return true;
+    }
+    let name_tokens = tokens(&app.name);
+    let pub_tokens = tokens(&app.publisher);
+    let has_name = name_tokens.iter().any(|t| t.len() >= 4 && cand.contains(t));
+    let has_pub = pub_tokens.iter().any(|t| t.len() >= 4 && cand.contains(t));
+    // Require a distinctive name token; a publisher hit alone is too loose.
+    has_name || (has_pub && name_tokens.iter().any(|t| cand.contains(t)))
+}
+
+fn subdirs(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(root) {
+        for e in rd.flatten().take(4000) {
+            let p = e.path();
+            if p.is_dir() {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+pub fn find_traces(app: &AppEntry) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut push = |p: PathBuf| {
+        if p.exists() && !out.iter().any(|x| norm(&x.to_string_lossy()) == norm(&p.to_string_lossy())) {
+            out.push(p);
+        }
+    };
+
+    // UWP data folder
+    if let Some(full) = &app.package_full_name {
+        if let Some(family) = full.split('_').next() {
+            if let Ok(local) = std::env::var("LOCALAPPDATA") {
+                let base = PathBuf::from(local).join("Packages");
+                for d in subdirs(&base) {
+                    let n = d.file_name().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                    if n.starts_with(&family.to_lowercase()) {
+                        push(d);
+                    }
+                }
+            }
+        }
+    }
+
+    let roots: Vec<PathBuf> = [
+        std::env::var("APPDATA").ok(),
+        std::env::var("LOCALAPPDATA").ok(),
+        std::env::var("PROGRAMDATA").ok(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(PathBuf::from)
+    .collect();
+
+    for root in roots {
+        for d in subdirs(&root) {
+            let name = d.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name.eq_ignore_ascii_case("Packages")
+                || name.eq_ignore_ascii_case("Microsoft")
+                || name.eq_ignore_ascii_case("Temp")
+            {
+                continue;
+            }
+            if looks_like_trace(name, app) {
+                push(d);
+            }
+        }
+    }
+
+    // Per-user temp folder
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        let temp = PathBuf::from(local).join("Temp");
+        for d in subdirs(&temp) {
+            let name = d.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if looks_like_trace(name, app) {
+                push(d);
+            }
+        }
+    }
+
+    out
+}
+
+fn reg_key_exists(root: RegRoot, path: &str) -> bool {
+    use winreg::enums::*;
+    use winreg::RegKey;
+    let (hive, view) = match root {
+        RegRoot::Hklm => (HKEY_LOCAL_MACHINE, KEY_READ | KEY_WOW64_64KEY),
+        RegRoot::Hklm32 => (HKEY_LOCAL_MACHINE, KEY_READ | KEY_WOW64_32KEY),
+        RegRoot::Hkcu => (HKEY_CURRENT_USER, KEY_READ),
+    };
+    RegKey::predef(hive)
+        .open_subkey_with_flags(path, view)
+        .is_ok()
+}
+
+pub fn delete_reg_key(root: RegRoot, path: &str) -> Result<(), String> {
+    use winreg::enums::*;
+    use winreg::RegKey;
+    let (hive, view) = match root {
+        RegRoot::Hklm => (HKEY_LOCAL_MACHINE, KEY_ALL_ACCESS | KEY_WOW64_64KEY),
+        RegRoot::Hklm32 => (HKEY_LOCAL_MACHINE, KEY_ALL_ACCESS | KEY_WOW64_32KEY),
+        RegRoot::Hkcu => (HKEY_CURRENT_USER, KEY_ALL_ACCESS),
+    };
+    let base = RegKey::predef(hive);
+    let (parent_path, leaf) = match path.rfind('\\') {
+        Some(i) => (&path[..i], &path[i + 1..]),
+        None => return Err("مسار غير صالح".into()),
+    };
+    let parent = base
+        .open_subkey_with_flags(parent_path, view)
+        .map_err(|e| e.to_string())?;
+    parent.delete_subkey_all(leaf).map_err(|e| e.to_string())
+}
+
+fn exe_path() -> PathBuf {
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("appsweep.exe"))
+}
+
+fn winget_available() -> bool {
+    let (rc, _) = crate::native::run_cmd("where winget", true);
+    rc == 0
+}
+
+// ---------------------------------------------------------------- plan building
+
+fn s(p: &Path) -> String {
+    p.to_string_lossy().to_string()
+}
+
+/// Drops paths that point at Windows itself or a shared system folder. This is
+/// the last line of defence: even a wrong registry entry cannot wipe the system.
+fn safe_paths(paths: Vec<String>) -> Vec<String> {
+    paths
+        .into_iter()
+        .filter(|p| !crate::model::is_protected_dir(Path::new(p)))
+        .collect()
+}
+
+pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bool) -> Vec<Step> {
+    let mut steps: Vec<Step> = Vec::new();
+    let mut add = |title: &str, detail: &str, op: Op, skip_if_gone: bool, optional: bool| {
+        steps.push(Step {
+            title: title.to_string(),
+            detail: detail.to_string(),
+            status: StepStatus::Pending,
+            op,
+            skip_if_gone,
+            optional,
+        });
+    };
+
+    let dir = app.install_dir.clone();
+    // "Keep user data" means: only touch the program folder, never the
+    // AppData / ProgramData leftovers that hold the user's own files.
+    let traces = if keep_data { Vec::new() } else { find_traces(app) };
+
+    add(
+        "إيقاف العمليات المرتبطة",
+        "إغلاق أي برنامج يعمل من مجلد التطبيق",
+        match &dir {
+            Some(d) if settings.kill_processes => Op::KillProcesses { path: s(d) },
+            _ => Op::Nothing,
+        },
+        false,
+        true,
+    );
+
+    if settings.create_restore_point {
+        add(
+            "إنشاء نقطة استعادة",
+            "حماية النظام قبل التعديل",
+            Op::RestorePoint {
+                desc: format!("AppSweep - {}", app.name),
+            },
+            false,
+            true,
+        );
+    }
+
+    if settings.backup_registry {
+        if let Some((root, key)) = &app.reg_key {
+            add(
+                "نسخة احتياطية من السجل",
+                "تصدير مفتاح إزالة التثبيت قبل حذفه",
+                Op::BackupRegistry {
+                    root: *root,
+                    key: key.clone(),
+                },
+                false,
+                true,
+            );
+        }
+    }
+
+    match flow {
+        Flow::Uninstall => {
+            if let Some(cmd) = &app.uninstall_string {
+                add(
+                    "أداة الإزالة الرسمية",
+                    "تشغيل أداة إزالة التثبيت الخاصة بالتطبيق",
+                    Op::RunUninstaller { cmd: cmd.clone() },
+                    true,
+                    false,
+                );
+            }
+            if let Some(cmd) = &app.quiet_uninstall_string {
+                add(
+                    "أداة الإزالة الصامتة",
+                    "محاولة الإزالة بدون واجهة",
+                    Op::RunUninstaller { cmd: cmd.clone() },
+                    true,
+                    true,
+                );
+            }
+            if let Some(prod) = &app.msi_product {
+                add(
+                    "إزالة حزمة MSI",
+                    "استخدام مثبت ويندوز لإزالة الحزمة",
+                    Op::RunMsi {
+                        product: prod.clone(),
+                    },
+                    true,
+                    true,
+                );
+            }
+            if app.source == Source::Uwp {
+                if let Some(full) = &app.package_full_name {
+                    add(
+                        "إزالة حزمة المتجر",
+                        "إزالة الحزمة للمستخدم الحالي",
+                        Op::RemoveUwp {
+                            full_name: full.clone(),
+                        },
+                        false,
+                        false,
+                    );
+                }
+            }
+            add(
+                "محاولة عبر مدير الحزم",
+                "استخدام أداة الطرفية لإزالة التطبيق",
+                Op::RunWinget {
+                    name: app.name.clone(),
+                },
+                true,
+                true,
+            );
+            if let Some(d) = &dir {
+                add(
+                    "حذف مجلد البرنامج",
+                    "حذف بقايا الملفات بعد الإزالة",
+                    Op::ForceDelete {
+                        paths: safe_paths(vec![s(d)]),
+                    },
+                    true,
+                    true,
+                );
+            }
+            if let Some((root, key)) = &app.reg_key {
+                add(
+                    "حذف مفتاح السجل",
+                    "إزالة الإدخال من قائمة البرامج",
+                    Op::DeleteReg {
+                        keys: vec![(*root, key.clone())],
+                    },
+                    false,
+                    true,
+                );
+            }
+            if !app.shortcuts.is_empty() {
+                add(
+                    "حذف الاختصارات",
+                    "إزالة أيقونات قائمة ابدأ وسطح المكتب",
+                    Op::DeleteShortcuts {
+                        paths: app.shortcuts.iter().map(|p| s(p)).collect(),
+                    },
+                    false,
+                    true,
+                );
+            }
+            add(
+                "تنظيف الملفات المؤقتة",
+                "حذف مخلفات التثبيت المؤقتة",
+                Op::CleanTemp,
+                false,
+                true,
+            );
+        }
+        Flow::Purge => {
+            let mut paths: Vec<String> = Vec::new();
+            if let Some(d) = &dir {
+                paths.push(s(d));
+            }
+            for t in &traces {
+                paths.push(s(t));
+            }
+            paths = safe_paths(paths);
+
+            let mut svc_names: Vec<String> = Vec::new();
+            if let Some(d) = &dir {
+                svc_names = crate::native::services_under(&s(d));
+            }
+            if !svc_names.is_empty() {
+                add(
+                    "إيقاف وحذف الخدمات",
+                    "إزالة الخدمات التي تعمل من مجلد التطبيق",
+                    Op::DeleteServices { names: svc_names },
+                    false,
+                    true,
+                );
+            }
+
+            // Autostart tasks that point into the app folder are part of its
+            // footprint; removing the folder alone would leave them broken.
+            if let Some(d) = &dir {
+                let tasks = crate::native::tasks_under(&s(d));
+                if !tasks.is_empty() {
+                    let n = tasks.len();
+                    add(
+                        "حذف المهام المجدولة",
+                        &format!("إزالة {} مهمة تشغيل تلقائي", n),
+                        Op::DeleteTasks { names: tasks },
+                        false,
+                        true,
+                    );
+                }
+            }
+
+            if app.source == Source::Uwp {
+                if let Some(full) = &app.package_full_name {
+                    add(
+                        "إزالة حزمة المتجر",
+                        "إزالة الحزمة قبل حذف بياناتها",
+                        Op::RemoveUwp {
+                            full_name: full.clone(),
+                        },
+                        false,
+                        false,
+                    );
+                }
+            }
+
+            if !paths.is_empty() {
+                add(
+                    "حذف الملفات والمجلدات",
+                    "حذف مجلد البرنامج وكل مجلدات البيانات",
+                    Op::ForceDelete {
+                        paths: paths.clone(),
+                    },
+                    false,
+                    false,
+                );
+            }
+
+            let mut regs: Vec<(RegRoot, String)> = Vec::new();
+            if let Some((root, key)) = &app.reg_key {
+                regs.push((*root, key.clone()));
+            }
+            if !regs.is_empty() {
+                add(
+                    "حذف مفاتيح السجل",
+                    "إزالة كل إدخالات التطبيق من السجل",
+                    Op::DeleteReg { keys: regs },
+                    false,
+                    false,
+                );
+            }
+
+            if !app.shortcuts.is_empty() {
+                add(
+                    "حذف الاختصارات",
+                    "إزالة كل روابط التطبيق",
+                    Op::DeleteShortcuts {
+                        paths: app.shortcuts.iter().map(|p| s(p)).collect(),
+                    },
+                    false,
+                    true,
+                );
+            }
+
+            add(
+                "تنظيف الملفات المؤقتة",
+                "حذف أي بقايا مؤقتة",
+                Op::CleanTemp,
+                false,
+                true,
+            );
+
+            add(
+                "جدولة حذف البقايا",
+                "حذف ما تبقى عند إعادة التشغيل",
+                Op::DeleteOnReboot { paths },
+                false,
+                true,
+            );
+        }
+        Flow::FilesOnly => {
+            if let Some(d) = &dir {
+                let only = safe_paths(vec![s(d)]);
+                if !only.is_empty() {
+                    add(
+                        "نقل المجلد إلى سلة المحذوفات",
+                        "حذف قابل للاستعادة",
+                        Op::Recycle { paths: only.clone() },
+                        false,
+                        true,
+                    );
+                    add(
+                        "حذف المجلد نهائياً",
+                        "حذف مباشر إذا فشلت سلة المحذوفات",
+                        Op::ForceDelete { paths: only },
+                        false,
+                        false,
+                    );
+                }
+            }
+            add(
+                "تنظيف الملفات المؤقتة",
+                "حذف مخلفات التثبيت المؤقتة",
+                Op::CleanTemp,
+                false,
+                true,
+            );
+        }
+    }
+
+    add(
+        "التحقق من النتيجة",
+        "التأكد من اختفاء الملفات",
+        Op::Verify {
+            paths: {
+                let mut v = Vec::new();
+                if let Some(d) = &dir {
+                    v.push(s(d));
+                }
+                v
+            },
+        },
+        false,
+        true,
+    );
+
+    steps
+}
+
+// ---------------------------------------------------------------- elevated plan file
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct PurgePlan {
+    pub delete_paths: Vec<String>,
+    pub delete_reg: Vec<(String, String)>,
+    pub services: Vec<String>,
+    pub tasks: Vec<String>,
+    pub shortcuts: Vec<String>,
+    pub result_path: String,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct PurgeResult {
+    pub deleted: u32,
+    pub failed: u32,
+    pub log: Vec<String>,
+}
+
+fn run_elevated_plan(plan: &PurgePlan) -> Result<PurgeResult, String> {
+    let dir = crate::icons::app_data_dir().join("plans");
+    let _ = std::fs::create_dir_all(&dir);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let plan_path = dir.join(format!("plan-{}.json", stamp));
+    let result_path = dir.join(format!("plan-{}.result.json", stamp));
+
+    let mut p = PurgePlan {
+        delete_paths: plan.delete_paths.clone(),
+        delete_reg: plan.delete_reg.clone(),
+        services: plan.services.clone(),
+        tasks: plan.tasks.clone(),
+        shortcuts: plan.shortcuts.clone(),
+        result_path: result_path.to_string_lossy().to_string(),
+    };
+    p.result_path = result_path.to_string_lossy().to_string();
+
+    let text = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?;
+    std::fs::write(&plan_path, text).map_err(|e| e.to_string())?;
+
+    let exe = exe_path();
+    let params = format!("--plan \"{}\"", plan_path.to_string_lossy());
+    let (rc, _) = crate::native::run_elevated(&exe.to_string_lossy(), &params, None, true);
+    if rc != 0 {
+        // 1223 = user cancelled the UAC prompt
+        return Err(format!("تعذر رفع الصلاحيات (رمز {})", rc));
+    }
+
+    let text = std::fs::read_to_string(&result_path).map_err(|e| e.to_string())?;
+    let res: PurgeResult = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&plan_path);
+    let _ = std::fs::remove_file(&result_path);
+    Ok(res)
+}
+
+/// Entry point used by the elevated child process.
+pub fn run_plan_file(path: &str) -> i32 {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(_) => return 2,
+    };
+    let plan: PurgePlan = match serde_json::from_str(&text) {
+        Ok(p) => p,
+        Err(_) => return 3,
+    };
+    let mut res = PurgeResult::default();
+
+    for name in &plan.services {
+        if crate::native::stop_delete_service(name) == 0 {
+            res.log.push(format!("service removed: {}", name));
+        } else {
+            res.log.push(format!("service failed: {}", name));
+        }
+    }
+    for task in &plan.tasks {
+        let _ = crate::native::delete_scheduled_task(task);
+    }
+    for key in &plan.delete_reg {
+        let root = match key.0.as_str() {
+            "HKLM" => RegRoot::Hklm,
+            "HKLM-32" => RegRoot::Hklm32,
+            _ => RegRoot::Hkcu,
+        };
+        match delete_reg_key(root, &key.1) {
+            Ok(_) => res.log.push(format!("registry removed: {}", key.1)),
+            Err(e) => {
+                res.failed += 1;
+                res.log.push(format!("registry failed: {} ({})", key.1, e));
+            }
+        }
+    }
+    for path in &plan.delete_paths {
+        if crate::model::is_protected_dir(Path::new(path)) {
+            res.log.push(format!("blocked protected path: {}", path));
+            res.failed += 1;
+            continue;
+        }
+        let r = crate::native::force_delete(path);
+        res.deleted += r.deleted.max(0) as u32;
+        res.failed += r.failed.max(0) as u32;
+        if !r.first_error.is_empty() {
+            res.log.push(r.first_error);
+        }
+    }
+    for sc in &plan.shortcuts {
+        let _ = crate::native::force_delete(sc);
+    }
+
+    if let Ok(text) = serde_json::to_string_pretty(&res) {
+        let _ = std::fs::write(&plan.result_path, text);
+    }
+    0
+}
+
+// ---------------------------------------------------------------- execution
+
+struct Runner {
+    tx: Sender<(usize, StepStatus, String)>,
+    verified_gone: bool,
+    app: AppEntry,
+    backup_dir: PathBuf,
+    log: Vec<String>,
+}
+
+impl Runner {
+    fn emit(&self, idx: usize, st: StepStatus, detail: impl Into<String>) {
+        let _ = self.tx.send((idx, st, detail.into()));
+    }
+
+    fn gone(&mut self) -> bool {
+        if self.verified_gone {
+            return true;
+        }
+        let dir_gone = self
+            .app
+            .install_dir
+            .as_ref()
+            .map(|d| !d.exists())
+            .unwrap_or(true);
+        let reg_gone = self
+            .app
+            .reg_key
+            .as_ref()
+            .map(|(r, k)| !reg_key_exists(*r, k))
+            .unwrap_or(true);
+        let pkg_gone = self
+            .app
+            .package_full_name
+            .is_none()
+            || self.app.source != Source::Uwp;
+        if dir_gone && reg_gone && pkg_gone {
+            self.verified_gone = true;
+        }
+        self.verified_gone
+    }
+
+    fn exec(&mut self, _idx: usize, op: &Op) -> (StepStatus, String) {
+        match op {
+            Op::Nothing => (StepStatus::Skip, "لا حاجة لهذه الخطوة".into()),
+            Op::KillProcesses { path } => {
+                let n = crate::native::count_processes_in(path);
+                if n == 0 {
+                    return (StepStatus::Skip, "لا توجد عمليات تعمل".into());
+                }
+                let killed = crate::native::kill_processes_in(path);
+                if killed > 0 {
+                    (
+                        StepStatus::Ok,
+                        format!("تم إغلاق {} عملية", killed),
+                    )
+                } else {
+                    (StepStatus::Warn, "تعذر إغلاق بعض العمليات".into())
+                }
+            }
+            Op::RestorePoint { desc } => {
+                let rc = crate::native::create_restore_point(desc);
+                if rc == 0 {
+                    (StepStatus::Ok, "تم إنشاء نقطة الاستعادة".into())
+                } else if rc == 5 {
+                    (StepStatus::Warn, "تحتاج صلاحيات مدير".into())
+                } else {
+                    (
+                        StepStatus::Warn,
+                        format!("تعذر إنشاء نقطة استعادة (رمز {})", rc),
+                    )
+                }
+            }
+            Op::BackupRegistry { root, key } => {
+                let _ = std::fs::create_dir_all(&self.backup_dir);
+                let safe: String = self
+                    .app
+                    .name
+                    .chars()
+                    .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                    .collect();
+                let file = self.backup_dir.join(format!("{}-{}.reg", safe, root.label()));
+                let full = match root {
+                    RegRoot::Hklm => format!("HKLM\\{}", key),
+                    RegRoot::Hklm32 => format!("HKLM\\{}", key),
+                    RegRoot::Hkcu => format!("HKCU\\{}", key),
+                };
+                let cmd = format!("reg export \"{}\" \"{}\" /y", full, file.to_string_lossy());
+                let (rc, _) = crate::native::run_cmd(&cmd, true);
+                if rc == 0 && file.exists() {
+                    // Only the file name: a full path mixed with Arabic text
+                    // cannot be rendered correctly by epaint.
+                    let name = file
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    (StepStatus::Ok, name)
+                } else {
+                    (StepStatus::Warn, "تعذر تصدير مفتاح السجل".into())
+                }
+            }
+            Op::RunUninstaller { cmd } => {
+                if cmd.trim().is_empty() {
+                    return (StepStatus::Skip, "لا توجد أداة إزالة".into());
+                }
+                let (file, args) = crate::scan::split_command(cmd);
+                let (rc, code) = if file.to_lowercase().ends_with(".msi") {
+                    crate::native::run_elevated(
+                        "msiexec.exe",
+                        &format!("/x \"{}\" /qb", file),
+                        None,
+                        true,
+                    )
+                } else {
+                    crate::native::run_elevated(&file, &args, None, true)
+                };
+                // 1223: user cancelled UAC
+                if rc == 1223 {
+                    return (StepStatus::Fail, "ألغيت صلاحية المدير".into());
+                }
+                if rc != 0 {
+                    return (
+                        StepStatus::Fail,
+                        format!("تعذر تشغيل الأداة (رمز {})", rc),
+                    );
+                }
+                if code == 0 {
+                    (StepStatus::Ok, "انتهت الأداة بنجاح".into())
+                } else {
+                    (
+                        StepStatus::Warn,
+                        format!("انتهت الأداة بالرمز {}", code),
+                    )
+                }
+            }
+            Op::RunMsi { product } => {
+                let (rc, code) = crate::native::run_elevated(
+                    "msiexec.exe",
+                    &format!("/x {} /qn /norestart", product),
+                    None,
+                    true,
+                );
+                if rc == 1223 {
+                    (StepStatus::Fail, "ألغيت صلاحية المدير".into())
+                } else if rc == 0 && (code == 0 || code == 3010) {
+                    (StepStatus::Ok, "تمت إزالة الحزمة".into())
+                } else {
+                    (
+                        StepStatus::Fail,
+                        format!("فشلت الإزالة (رمز {})", code),
+                    )
+                }
+            }
+            Op::RunWinget { name } => {
+                if !winget_available() {
+                    return (StepStatus::Skip, "أداة الطرفية غير متوفرة".into());
+                }
+                let cmd = format!(
+                    "winget uninstall --name \"{}\" --silent --accept-source-agreements --disable-interactivity",
+                    name
+                );
+                let (rc, code) = crate::native::run_cmd(&cmd, true);
+                if rc == 0 && code == 0 {
+                    (StepStatus::Ok, "تمت الإزالة عبر مدير الحزم".into())
+                } else {
+                    (
+                        StepStatus::Fail,
+                        format!("لم ينجح مدير الحزم (رمز {})", code),
+                    )
+                }
+            }
+            Op::RemoveUwp { full_name } => {
+                let cmd = format!(
+                    "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Remove-AppxPackage -Package '{}' -ErrorAction Stop\"",
+                    full_name
+                );
+                let (rc, code) = crate::native::run_cmd(&cmd, true);
+                if rc == 0 && code == 0 {
+                    (StepStatus::Ok, "تمت إزالة الحزمة".into())
+                } else {
+                    (
+                        StepStatus::Fail,
+                        format!("تعذرت إزالة الحزمة (رمز {})", code),
+                    )
+                }
+            }
+            Op::ForceDelete { paths } => {
+                let mut deleted = 0;
+                let mut failed = 0;
+                let mut errors: Vec<String> = Vec::new();
+                let guarded = safe_paths(paths.clone());
+                if guarded.is_empty() {
+                    return (StepStatus::Warn, "المسار محمي من الحذف".into());
+                }
+                for p in &guarded {
+                    if !crate::native::path_exists(p) {
+                        continue;
+                    }
+                    let r = crate::native::force_delete(p);
+                    deleted += r.deleted.max(0) as u32;
+                    failed += r.failed.max(0) as u32;
+                    if !r.first_error.is_empty() {
+                        errors.push(r.first_error);
+                    }
+                }
+                if failed > 0 && !crate::native::is_elevated() {
+                    // Retry the leftovers with an elevated helper process.
+                    let plan = PurgePlan {
+                        delete_paths: guarded
+                            .iter()
+                            .filter(|p| crate::native::path_exists(p))
+                            .cloned()
+                            .collect(),
+                        ..Default::default()
+                    };
+                    if !plan.delete_paths.is_empty() {
+                        if let Ok(res) = run_elevated_plan(&plan) {
+                            deleted += res.deleted;
+                            failed = failed.saturating_sub(res.deleted).min(failed);
+                            if res.failed == 0 {
+                                failed = 0;
+                            }
+                        }
+                    }
+                }
+                if failed == 0 {
+                    (
+                        StepStatus::Ok,
+                        format!("حُذف {} عنصر", deleted),
+                    )
+                } else if deleted > 0 {
+                    (
+                        StepStatus::Warn,
+                        format!("حُذف {} وفشل {}", deleted, failed),
+                    )
+                } else {
+                    (
+                        StepStatus::Fail,
+                        errors.first().cloned().unwrap_or_else(|| "تعذر الحذف".into()),
+                    )
+                }
+            }
+            Op::Recycle { paths } => {
+                let mut ok = 0;
+                for p in safe_paths(paths.clone()) {
+                    if crate::native::recycle(&p) == 0 {
+                        ok += 1;
+                    }
+                }
+                if ok > 0 {
+                    (StepStatus::Ok, "تم النقل إلى سلة المحذوفات".into())
+                } else {
+                    (StepStatus::Warn, "تعذر النقل إلى السلة".into())
+                }
+            }
+            Op::DeleteReg { keys } => {
+                let mut ok = 0;
+                let mut err: Option<String> = None;
+                let mut pending: Vec<(String, String)> = Vec::new();
+                for (root, key) in keys {
+                    if !reg_key_exists(*root, key) {
+                        continue;
+                    }
+                    match delete_reg_key(*root, key) {
+                        Ok(_) => ok += 1,
+                        Err(e) => {
+                            pending.push((root.label().to_string(), key.clone()));
+                            err = Some(e);
+                        }
+                    }
+                }
+                if !pending.is_empty() {
+                    let plan = PurgePlan {
+                        delete_reg: pending,
+                        ..Default::default()
+                    };
+                    match run_elevated_plan(&plan) {
+                        Ok(res) => {
+                            if res.failed == 0 {
+                                ok += 1;
+                                err = None;
+                            }
+                        }
+                        Err(e) => err = Some(e),
+                    }
+                }
+                if ok > 0 && err.is_none() {
+                    (StepStatus::Ok, "تم حذف الإدخال".into())
+                } else if let Some(e) = err {
+                    (StepStatus::Fail, format!("تعذر الحذف: {}", e))
+                } else {
+                    (StepStatus::Skip, "الإدخال غير موجود".into())
+                }
+            }
+            Op::DeleteShortcuts { paths } => {
+                let mut n = 0;
+                for p in safe_paths(paths.clone()) {
+                    if Path::new(&p).exists() && crate::native::force_delete(&p).failed == 0 {
+                        n += 1;
+                    }
+                }
+                if n > 0 {
+                    (StepStatus::Ok, format!("حُذف {} اختصار", n))
+                } else {
+                    (StepStatus::Skip, "لا اختصارات متبقية".into())
+                }
+            }
+            Op::DeleteServices { names } => {
+                let mut ok = 0;
+                for n in names {
+                    if crate::native::stop_delete_service(n) == 0 {
+                        ok += 1;
+                    }
+                }
+                if ok > 0 {
+                    (StepStatus::Ok, format!("أُزيلت {} خدمة", ok))
+                } else {
+                    (StepStatus::Warn, "تحتاج صلاحيات مدير لحذف الخدمات".into())
+                }
+            }
+            Op::DeleteTasks { names } => {
+                let mut ok = 0;
+                for n in names {
+                    if crate::native::delete_scheduled_task(n) == 0 {
+                        ok += 1;
+                    }
+                }
+                if ok > 0 {
+                    (StepStatus::Ok, format!("أُزيلت {} مهمة", ok))
+                } else {
+                    (StepStatus::Skip, "لا مهام مجدولة".into())
+                }
+            }
+            Op::DeleteOnReboot { paths } => {
+                let mut n = 0;
+                for p in safe_paths(paths.clone()) {
+                    if crate::native::path_exists(&p) && crate::native::delete_on_reboot(&p) == 0 {
+                        n += 1;
+                    }
+                }
+                if n > 0 {
+                    (StepStatus::Ok, format!("جُدول حذف {} عنصر عند الإعادة", n))
+                } else {
+                    (StepStatus::Skip, "لا بقايا".into())
+                }
+            }
+            Op::Verify { paths } => {
+                let left: Vec<&String> = paths
+                    .iter()
+                    .filter(|p| crate::native::path_exists(p))
+                    .collect();
+                if left.is_empty() {
+                    self.verified_gone = true;
+                    (StepStatus::Ok, "تمت الإزالة بالكامل".into())
+                } else {
+                    (
+                        StepStatus::Warn,
+                        "ما زالت بعض الملفات موجودة".into(),
+                    )
+                }
+            }
+            Op::CleanTemp => {
+                let mut n = 0u32;
+                if let Ok(local) = std::env::var("LOCALAPPDATA") {
+                    let temp = PathBuf::from(local).join("Temp");
+                    let needle = norm(&self.app.name);
+                    if needle.len() >= 4 {
+                        for d in subdirs(&temp) {
+                            let name = d
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .map(norm)
+                                .unwrap_or_default();
+                            if name.contains(&needle) && crate::native::force_delete(&s(&d)).failed == 0 {
+                                n += 1;
+                            }
+                        }
+                    }
+                }
+                if n > 0 {
+                    (StepStatus::Ok, format!("نُظّف {} مجلد مؤقت", n))
+                } else {
+                    (StepStatus::Skip, "لا ملفات مؤقتة".into())
+                }
+            }
+        }
+    }
+}
+
+pub fn spawn(app: AppEntry, flow: Flow, settings: Settings, keep_data: bool) -> Job {
+    let steps = build_plan(&app, flow, &settings, keep_data);
+    let (tx, rx) = channel();
+    let app_id = app.id;
+    let app_name = app.name.clone();
+
+    let backup_dir = crate::icons::app_data_dir()
+        .join("backups")
+        .join(app_name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect::<String>());
+
+    let runner = Runner {
+        tx: tx.clone(),
+        verified_gone: false,
+        app: app.clone(),
+        backup_dir,
+        log: Vec::new(),
+    };
+
+    let step_ops: Vec<(usize, Op, bool, bool)> = steps
+        .iter()
+        .enumerate()
+        .map(|(i, st)| (i, st.op.clone(), st.skip_if_gone, st.optional))
+        .collect();
+    let total = step_ops.len();
+    let auto_cascade = settings.auto_cascade;
+
+    thread::Builder::new()
+        .name("job".into())
+        .spawn(move || {
+            let mut r = runner;
+            // When auto-cascade is off, the first removal method that fails
+            // stops the chain so the user can inspect what happened. With it
+            // on, every remaining method is tried in order.
+            let mut stop_chain = false;
+            for (idx, op, skip_if_gone, optional) in step_ops {
+                if stop_chain && optional {
+                    r.emit(idx, StepStatus::Skip, "تم إيقاف السلسلة بعد فشل سابق");
+                    continue;
+                }
+                if skip_if_gone && r.gone() {
+                    r.emit(idx, StepStatus::Skip, "تمت الإزالة مسبقاً");
+                    continue;
+                }
+                r.emit(idx, StepStatus::Running, "");
+                let (st, detail) = r.exec(idx, &op);
+                r.log.push(format!("{}: {}", idx, detail));
+                let failed = st == StepStatus::Fail;
+                r.emit(idx, st, detail);
+                if failed && !auto_cascade {
+                    stop_chain = true;
+                }
+                // Small pause so the UI can show progress on instant steps.
+                thread::sleep(std::time::Duration::from_millis(40));
+            }
+            let _ = r.tx.send((total, StepStatus::Ok, String::new()));
+        })
+        .ok();
+
+    Job {
+        app_id,
+        app_name,
+        flow,
+        steps,
+        done: false,
+        summary: String::new(),
+        success: false,
+        rx,
+    }
+}
+
+// ---------------------------------------------------------------- backups
+
+/// One saved registry export, as shown in the backup manager.
+#[derive(Clone, Debug)]
+pub struct BackupEntry {
+    /// Folder name under `%APPDATA%\AppSweep\backups` (the app name, sanitised).
+    pub group: String,
+    /// File name of the `.reg` export.
+    pub file: String,
+    pub path: PathBuf,
+    pub size: u64,
+    pub modified: String,
+    /// Registry root the export came from, parsed from the file name.
+    pub root: String,
+}
+
+pub fn backups_root() -> PathBuf {
+    crate::icons::app_data_dir().join("backups")
+}
+
+/// Lists every saved registry backup, newest first.
+pub fn list_backups() -> Vec<BackupEntry> {
+    let root = backups_root();
+    let mut out: Vec<BackupEntry> = Vec::new();
+    let dirs = match std::fs::read_dir(&root) {
+        Ok(d) => d,
+        Err(_) => return out,
+    };
+    for group in dirs.flatten() {
+        let gpath = group.path();
+        if !gpath.is_dir() {
+            continue;
+        }
+        let group_name = group.file_name().to_string_lossy().to_string();
+        let files = match std::fs::read_dir(&gpath) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        for f in files.flatten() {
+            let fpath = f.path();
+            if !fpath.is_file() {
+                continue;
+            }
+            let name = f.file_name().to_string_lossy().to_string();
+            if !name.to_lowercase().ends_with(".reg") {
+                continue;
+            }
+            let meta = std::fs::metadata(&fpath).ok();
+            let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            let modified = meta
+                .and_then(|m| m.modified().ok())
+                .map(format_time)
+                .unwrap_or_default();
+            // "<app>-<ROOT>.reg" -> ROOT
+            let root = name
+                .trim_end_matches(".reg")
+                .trim_end_matches(".REG")
+                .rsplit('-')
+                .next()
+                .unwrap_or("")
+                .to_string();
+            out.push(BackupEntry {
+                group: group_name.clone(),
+                file: name,
+                path: fpath,
+                size,
+                modified,
+                root,
+            });
+        }
+    }
+    out.sort_by(|a, b| b.modified.cmp(&a.modified));
+    out
+}
+
+fn format_time(t: std::time::SystemTime) -> String {
+    let secs = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Convert to a readable local date without pulling in a date library.
+    let days = (secs / 86400) as i64;
+    let rem = secs % 86400;
+    let (h, mi) = (rem / 3600, (rem % 3600) / 60);
+    // Civil-from-days (Howard Hinnant's algorithm).
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{:04}-{:02}-{:02} {:02}:{:02}", y, m, d, h, mi)
+}
+
+/// Deletes one backup file. The parent folder is removed when it becomes empty.
+pub fn delete_backup(entry: &BackupEntry) -> Result<(), String> {
+    let p = &entry.path;
+    if !p.exists() {
+        return Ok(());
+    }
+    let r = crate::native::force_delete(&entry.path.to_string_lossy());
+    if r.failed > 0 {
+        return Err(r.first_error);
+    }
+    if let Some(parent) = entry.path.parent() {
+        let empty = std::fs::read_dir(parent)
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false);
+        if empty {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+    Ok(())
+}
+
+/// Deletes every saved backup and the backups root itself.
+pub fn clear_backups() -> Result<usize, String> {
+    let root = backups_root();
+    if !root.exists() {
+        return Ok(0);
+    }
+    let n = list_backups().len();
+    let r = crate::native::force_delete(&root.to_string_lossy());
+    if r.failed > 0 {
+        return Err(r.first_error);
+    }
+    Ok(n)
+}
+
+/// Total size of every saved backup, in bytes.
+pub fn backups_size() -> u64 {
+    list_backups().iter().map(|b| b.size).sum()
+}
+
+/// Headless self-test: builds a scratch app folder, registry key and shortcut,
+/// then drives the very same runner the UI uses and prints every step result.
+/// Enabled with `--selftest`; never touches a real installation.
+pub fn selftest() -> i32 {
+    use crate::model::{AppEntry, RegRoot, Source};
+    use crate::settings::Settings;
+
+    let root = std::env::temp_dir().join("appsweep-selftest");
+    let app_dir = root.join("DemoApp");
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::create_dir_all(app_dir.join("bin"));
+    let _ = std::fs::write(app_dir.join("readme.txt"), b"x");
+    let _ = std::fs::write(app_dir.join("bin").join("demo.dll"), b"y");
+    let _ = std::fs::write(app_dir.join("demo.exe"), b"z");
+
+    let reg_path = "Software\\AppSweepSelftest\\DemoApp";
+    {
+        use winreg::enums::*;
+        let hkcu = winreg::RegKey::predef(HKEY_CURRENT_USER);
+        if let Ok(k) = hkcu.create_subkey(reg_path) {
+            let _ = k.0.set_value("DisplayName", &"DemoApp");
+            let _ = k.0.set_value("DisplayVersion", &"1.0");
+        }
+    }
+
+    let mut app = AppEntry::new(1, "DemoApp".to_string(), Source::Registry);
+    app.install_dir = Some(app_dir.clone());
+    app.launch_exe = Some(app_dir.join("demo.exe"));
+    app.reg_key = Some((RegRoot::Hkcu, reg_path.to_string()));
+    app.version = "1.0".into();
+
+    let settings = Settings {
+        // A restore point is the slowest and most fragile step, so it is opt-in
+        // for the self-test: set APPSWEEP_SELFTEST_RP=1 to include it.
+        create_restore_point: std::env::var("APPSWEEP_SELFTEST_RP").is_ok(),
+        backup_registry: true,
+        kill_processes: true,
+        ..Default::default()
+    };
+
+    println!("selftest root: {}", root.display());
+    let mut job = spawn(app, Flow::Purge, settings, false);
+    let mut last = usize::MAX;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        job.poll();
+        let (done, total) = job.progress();
+        if done != last {
+            last = done;
+            println!("progress {}/{}", done, total);
+        }
+        if job.done || std::time::Instant::now() > deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    let mut failures = 0;
+    for (i, st) in job.steps.iter().enumerate() {
+        let tag = format!("{:?}", st.status);
+        println!("{:>2}. [{}] {} — {}", i + 1, tag, st.title, st.detail);
+        if st.status == StepStatus::Fail {
+            failures += 1;
+        }
+    }
+
+    let dir_gone = !app_dir.exists();
+    let reg_gone = {
+        use winreg::enums::*;
+        winreg::RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey(reg_path)
+            .is_err()
+    };
+    println!("dir gone: {}", dir_gone);
+    println!("registry gone: {}", reg_gone);
+    println!("failed steps: {}", failures);
+    let _ = std::fs::remove_dir_all(&root);
+
+    // ---- backup manager: list, import, delete, clear
+    let mut bk_failures = 0;
+    let group = "ZZSelfTestGroup";
+    let bdir = backups_root().join(group);
+    let _ = std::fs::create_dir_all(&bdir);
+    let bfile = bdir.join(format!("{}-HKCU.reg", group));
+    let _ = std::fs::write(
+        &bfile,
+        "Windows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\Software\\AppSweepBkSelfTest]\r\n\"Marker\"=\"ok\"\r\n",
+    );
+    let listed = list_backups();
+    let found = listed.iter().any(|b| b.group == group);
+    println!("backup listed: {}", found);
+    if !found {
+        bk_failures += 1;
+    }
+    if let Some(entry) = listed.iter().find(|b| b.group == group) {
+        println!("backup root parsed: {}", entry.root);
+        if entry.root != "HKCU" {
+            bk_failures += 1;
+        }
+        match delete_backup(entry) {
+            Ok(()) => {
+                let gone = !bfile.exists();
+                println!("backup file deleted: {}", gone);
+                if !gone {
+                    bk_failures += 1;
+                }
+            }
+            Err(e) => {
+                println!("backup delete error: {}", e);
+                bk_failures += 1;
+            }
+        }
+    }
+    // The now-empty group folder must be cleaned up as well.
+    let group_gone = !bdir.exists();
+    println!("backup group folder removed: {}", group_gone);
+    if !group_gone {
+        bk_failures += 1;
+    }
+    println!("backup failures: {}", bk_failures);
+
+    if dir_gone && reg_gone && failures == 0 && bk_failures == 0 {
+        println!("SELFTEST OK");
+        0
+    } else {
+        println!("SELFTEST FAILED");
+        1
+    }
+}

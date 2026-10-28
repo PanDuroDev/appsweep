@@ -1,0 +1,275 @@
+use crate::settings::{Accent, Density, ThemeMode};
+use egui::{Color32, CornerRadius, FontFamily, FontId, Stroke, TextStyle};
+
+#[derive(Clone)]
+pub struct Palette {
+    pub bg: Color32,
+    pub bg_alt: Color32,
+    pub panel: Color32,
+    pub card: Color32,
+    pub card_hover: Color32,
+    pub border: Color32,
+    pub border_strong: Color32,
+    pub text: Color32,
+    pub text_dim: Color32,
+    pub text_faint: Color32,
+    pub accent: Color32,
+    pub accent_soft: Color32,
+    pub accent_text: Color32,
+    pub danger: Color32,
+    pub danger_soft: Color32,
+    pub warn: Color32,
+    pub warn_soft: Color32,
+    pub ok: Color32,
+    pub ok_soft: Color32,
+    pub dark: bool,
+}
+
+impl Palette {
+    pub fn new(mode: ThemeMode, accent: Accent) -> Self {
+        let (ar, ag, ab) = accent.rgb();
+        let accent = Color32::from_rgb(ar, ag, ab);
+        match mode {
+            ThemeMode::Dark => Self {
+                bg: Color32::from_rgb(13, 16, 23),
+                bg_alt: Color32::from_rgb(17, 21, 30),
+                panel: Color32::from_rgb(20, 25, 35),
+                card: Color32::from_rgb(24, 30, 42),
+                card_hover: Color32::from_rgb(31, 39, 54),
+                border: Color32::from_rgb(38, 46, 61),
+                border_strong: Color32::from_rgb(56, 68, 90),
+                text: Color32::from_rgb(232, 238, 248),
+                text_dim: Color32::from_rgb(160, 172, 192),
+                text_faint: Color32::from_rgb(108, 120, 140),
+                accent,
+                accent_soft: Color32::from_rgba_unmultiplied(ar, ag, ab, 38),
+                accent_text: Color32::from_rgb(
+                    (ar as u16 + 60).min(255) as u8,
+                    (ag as u16 + 50).min(255) as u8,
+                    (ab as u16 + 40).min(255) as u8,
+                ),
+                danger: Color32::from_rgb(240, 100, 112),
+                danger_soft: Color32::from_rgba_unmultiplied(240, 100, 112, 34),
+                warn: Color32::from_rgb(238, 178, 78),
+                warn_soft: Color32::from_rgba_unmultiplied(238, 178, 78, 32),
+                ok: Color32::from_rgb(78, 198, 138),
+                ok_soft: Color32::from_rgba_unmultiplied(78, 198, 138, 32),
+                dark: true,
+            },
+            ThemeMode::Light => Self {
+                bg: Color32::from_rgb(243, 245, 249),
+                bg_alt: Color32::from_rgb(236, 239, 245),
+                panel: Color32::from_rgb(255, 255, 255),
+                card: Color32::from_rgb(255, 255, 255),
+                card_hover: Color32::from_rgb(247, 249, 253),
+                border: Color32::from_rgb(219, 225, 235),
+                border_strong: Color32::from_rgb(196, 204, 218),
+                text: Color32::from_rgb(24, 30, 42),
+                text_dim: Color32::from_rgb(88, 100, 118),
+                text_faint: Color32::from_rgb(138, 148, 165),
+                accent,
+                accent_soft: Color32::from_rgba_unmultiplied(ar, ag, ab, 26),
+                accent_text: Color32::from_rgb(
+                    (ar as u16).saturating_sub(20) as u8,
+                    (ag as u16).saturating_sub(20) as u8,
+                    (ab as u16).saturating_sub(10) as u8,
+                ),
+                danger: Color32::from_rgb(203, 60, 74),
+                danger_soft: Color32::from_rgba_unmultiplied(203, 60, 74, 22),
+                warn: Color32::from_rgb(166, 116, 18),
+                warn_soft: Color32::from_rgba_unmultiplied(200, 150, 40, 26),
+                ok: Color32::from_rgb(30, 140, 92),
+                ok_soft: Color32::from_rgba_unmultiplied(30, 140, 92, 22),
+                dark: false,
+            },
+        }
+    }
+}
+
+pub fn apply(ctx: &egui::Context, mode: ThemeMode, accent: Accent, density: Density) {
+    let p = Palette::new(mode, accent);
+    let mut style = if p.dark {
+        egui::Style::default()
+    } else {
+        egui::Style {
+            visuals: egui::Visuals::light(),
+            ..Default::default()
+        }
+    };
+
+    let mut visuals = if p.dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+
+    visuals.panel_fill = p.bg;
+    visuals.window_fill = p.panel;
+    visuals.extreme_bg_color = if p.dark {
+        Color32::from_rgb(10, 13, 19)
+    } else {
+        Color32::from_rgb(255, 255, 255)
+    };
+    visuals.faint_bg_color = p.bg_alt;
+    visuals.window_stroke = Stroke::new(1.0, p.border);
+    visuals.window_corner_radius = CornerRadius::same(12);
+    visuals.menu_corner_radius = CornerRadius::same(10);
+    visuals.selection.bg_fill = p.accent_soft;
+    visuals.selection.stroke = Stroke::new(1.0, p.accent);
+    visuals.hyperlink_color = p.accent;
+    visuals.warn_fg_color = p.warn;
+    visuals.error_fg_color = p.danger;
+
+    let w = &mut visuals.widgets;
+    w.noninteractive.bg_fill = p.panel;
+    w.noninteractive.weak_bg_fill = p.bg_alt;
+    w.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
+    w.noninteractive.fg_stroke = Stroke::new(1.0, p.text_dim);
+    w.noninteractive.corner_radius = CornerRadius::same(8);
+
+    w.inactive.bg_fill = if p.dark {
+        Color32::from_rgb(30, 37, 50)
+    } else {
+        Color32::from_rgb(243, 245, 249)
+    };
+    w.inactive.weak_bg_fill = w.inactive.bg_fill;
+    w.inactive.bg_stroke = Stroke::new(1.0, p.border);
+    w.inactive.fg_stroke = Stroke::new(1.0, p.text);
+    w.inactive.corner_radius = CornerRadius::same(8);
+
+    w.hovered.bg_fill = p.card_hover;
+    w.hovered.weak_bg_fill = p.card_hover;
+    w.hovered.bg_stroke = Stroke::new(1.0, p.border_strong);
+    w.hovered.fg_stroke = Stroke::new(1.5, p.text);
+    w.hovered.corner_radius = CornerRadius::same(8);
+
+    w.active.bg_fill = p.accent_soft;
+    w.active.weak_bg_fill = p.accent_soft;
+    w.active.bg_stroke = Stroke::new(1.0, p.accent);
+    w.active.fg_stroke = Stroke::new(1.5, p.text);
+    w.active.corner_radius = CornerRadius::same(8);
+
+    w.open.bg_fill = p.card_hover;
+    w.open.weak_bg_fill = p.card_hover;
+    w.open.bg_stroke = Stroke::new(1.0, p.border_strong);
+    w.open.fg_stroke = Stroke::new(1.0, p.text);
+    w.open.corner_radius = CornerRadius::same(8);
+
+    style.visuals = visuals;
+    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+    style.spacing.button_padding = egui::vec2(12.0, 6.0);
+    style.spacing.menu_margin = egui::Margin::same(8);
+    style.spacing.indent = 16.0;
+    style.spacing.scroll.bar_width = 9.0;
+    style.spacing.scroll.floating = false;
+    style.spacing.interact_size.y = match density {
+        Density::Compact => 24.0,
+        Density::Normal => 28.0,
+        Density::Relaxed => 34.0,
+    };
+
+    style.text_styles.insert(
+        TextStyle::Heading,
+        FontId::new(22.0, FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        TextStyle::Body,
+        FontId::new(14.5, FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        TextStyle::Button,
+        FontId::new(14.0, FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        TextStyle::Small,
+        FontId::new(12.0, FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        TextStyle::Monospace,
+        FontId::new(12.5, FontFamily::Monospace),
+    );
+
+    ctx.all_styles_mut(|s| *s = style.clone());
+    ctx.set_theme(if p.dark {
+        egui::ThemePreference::Dark
+    } else {
+        egui::ThemePreference::Light
+    });
+}
+
+/// Bold text helper (uses the "bold" family when the font was loaded).
+pub fn bold(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("bold".into()))
+}
+
+pub fn load_fonts(ctx: &egui::Context) {
+    use std::sync::Arc;
+    let mut fonts = egui::FontDefinitions::default();
+
+    let candidates: [(&str, &[&str]); 2] = [
+        ("ar", &["C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\tahoma.ttf"]),
+        ("arb", &["C:\\Windows\\Fonts\\segoeuib.ttf", "C:\\Windows\\Fonts\\tahomabd.ttf"]),
+    ];
+
+    for (name, paths) in candidates {
+        for p in paths {
+            if let Ok(bytes) = std::fs::read(p) {
+                fonts
+                    .font_data
+                    .insert(name.to_string(), Arc::new(egui::FontData::from_owned(bytes)));
+                break;
+            }
+        }
+        if fonts.font_data.contains_key(name) {
+            let fam = if name == "ar" {
+                FontFamily::Proportional
+            } else {
+                FontFamily::Name("bold".into())
+            };
+            fonts
+                .families
+                .entry(fam)
+                .or_default()
+                .insert(0, name.to_string());
+        }
+    }
+
+    // Symbol font: Segoe UI has no glyphs for stars, check marks, folder marks...
+    // Segoe UI Symbol covers all of them, so append it as a last-resort fallback.
+    for p in [
+        "C:\\Windows\\Fonts\\seguisym.ttf",
+        "C:\\Windows\\Fonts\\seguisb.ttf",
+    ] {
+        if let Ok(bytes) = std::fs::read(p) {
+            fonts.font_data.insert(
+                "sym".to_string(),
+                Arc::new(egui::FontData::from_owned(bytes)),
+            );
+            break;
+        }
+    }
+    if fonts.font_data.contains_key("sym") {
+        for fam in [
+            FontFamily::Proportional,
+            FontFamily::Monospace,
+            FontFamily::Name("bold".into()),
+        ] {
+            fonts
+                .families
+                .entry(fam)
+                .or_default()
+                .push("sym".to_string());
+        }
+    }
+
+    // Keep a monospace fallback that also has Arabic glyphs.
+    if fonts.font_data.contains_key("ar") {
+        fonts
+            .families
+            .entry(FontFamily::Monospace)
+            .or_default()
+            .push("ar".to_string());
+    }
+
+    ctx.set_fonts(fonts);
+}
