@@ -238,7 +238,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
                         let stroke = if selected {
                             Stroke::new(1.4, p.accent)
                         } else {
-                            Stroke::new(1.0, p.border)
+                            Stroke::new(1.0, p.outline)
                         };
                         ui.painter().rect(r, CornerRadius::same(theme::R_CARD), bg, stroke, StrokeKind::Inside);
                         if resp.hovered() {
@@ -430,9 +430,9 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
             let (fg, fill) = if !armed {
                 (p.text_faint, p.card_hover)
             } else if danger {
-                (Color32::WHITE, p.danger)
+                (p.on_danger, p.danger)
             } else {
-                (Color32::WHITE, p.accent)
+                (p.on_accent, p.accent)
             };
             let go = ui
                 .add_enabled_ui(armed, |ui| {
@@ -1291,7 +1291,7 @@ pub fn backups(
                     p.danger_soft
                 };
                 let fg = if *confirm_clear {
-                    Color32::WHITE
+                    p.on_danger
                 } else {
                     p.danger
                 };

@@ -458,7 +458,7 @@ impl AppSweep {
                             egui::Align2::CENTER_CENTER,
                             "A",
                             FontId::proportional(theme::T_TITLE),
-                            Color32::WHITE,
+                            p.on_accent,
                         );
                         ui.add_space(2.0);
                         ui.label(
@@ -502,7 +502,7 @@ impl AppSweep {
                             } else {
                                 Color32::from_rgb(248, 250, 253)
                             })
-                            .stroke(Stroke::new(1.0, p.border))
+                            .stroke(Stroke::new(1.0, p.outline))
                             .corner_radius(CornerRadius::same(theme::R_PILL))
                             .inner_margin(Margin::symmetric(12, 5));
                         search_frame.show(ui, |ui| {

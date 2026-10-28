@@ -25,14 +25,21 @@ pub struct Palette {
     pub card_hover: Color32,
     pub border: Color32,
     pub border_strong: Color32,
+    /// Boundary of an interactive control. `border` is decoration and may stay
+    /// faint; this one has to clear 3:1 against the surfaces it sits on.
+    pub outline: Color32,
     pub text: Color32,
     pub text_dim: Color32,
     pub text_faint: Color32,
     pub accent: Color32,
     pub accent_soft: Color32,
     pub accent_text: Color32,
+    /// Label on the raw accent fill, picked by measured contrast.
+    pub on_accent: Color32,
     pub danger: Color32,
     pub danger_soft: Color32,
+    /// Label on a filled danger surface, picked by measured contrast.
+    pub on_danger: Color32,
     pub warn: Color32,
     pub warn_soft: Color32,
     pub ok: Color32,
@@ -57,9 +64,10 @@ impl Palette {
                 card_hover: Color32::from_rgb(31, 39, 54),
                 border: Color32::from_rgb(38, 46, 61),
                 border_strong: Color32::from_rgb(56, 68, 90),
+                outline: Color32::from_rgb(104, 114, 134),
                 text: Color32::from_rgb(232, 238, 248),
                 text_dim: Color32::from_rgb(160, 172, 192),
-                text_faint: Color32::from_rgb(108, 120, 140),
+                text_faint: Color32::from_rgb(138, 150, 167),
                 accent,
                 accent_soft: Color32::from_rgba_unmultiplied(ar, ag, ab, 38),
                 accent_text: Color32::from_rgb(
@@ -67,8 +75,10 @@ impl Palette {
                     (ag as u16 + 50).min(255) as u8,
                     (ab as u16 + 40).min(255) as u8,
                 ),
-                danger: Color32::from_rgb(240, 100, 112),
+                on_accent: Color32::from_rgb(11, 14, 20),
+                danger: Color32::from_rgb(255, 120, 132),
                 danger_soft: Color32::from_rgba_unmultiplied(240, 100, 112, 34),
+                on_danger: Color32::from_rgb(11, 14, 20),
                 warn: Color32::from_rgb(238, 178, 78),
                 warn_soft: Color32::from_rgba_unmultiplied(238, 178, 78, 32),
                 ok: Color32::from_rgb(78, 198, 138),
@@ -85,27 +95,85 @@ impl Palette {
                 card_hover: Color32::from_rgb(247, 249, 253),
                 border: Color32::from_rgb(219, 225, 235),
                 border_strong: Color32::from_rgb(196, 204, 218),
+                outline: Color32::from_rgb(120, 128, 142),
                 text: Color32::from_rgb(24, 30, 42),
                 text_dim: Color32::from_rgb(88, 100, 118),
-                text_faint: Color32::from_rgb(138, 148, 165),
+                text_faint: Color32::from_rgb(95, 105, 120),
                 accent,
                 accent_soft: Color32::from_rgba_unmultiplied(ar, ag, ab, 26),
-                accent_text: Color32::from_rgb(
-                    (ar as u16).saturating_sub(20) as u8,
-                    (ag as u16).saturating_sub(20) as u8,
-                    (ab as u16).saturating_sub(10) as u8,
-                ),
-                danger: Color32::from_rgb(203, 60, 74),
+                // Light surfaces need a much darker ink than the accent itself:
+                // these are the darkest-but-same-hue points where the soft fill
+                // still clears 4.5:1 once it is composited over every surface.
+                accent_text: ink_on_light(accent),
+                on_accent: readable_on(accent),
+                danger: Color32::from_rgb(180, 53, 65),
                 danger_soft: Color32::from_rgba_unmultiplied(203, 60, 74, 22),
-                warn: Color32::from_rgb(166, 116, 18),
+                on_danger: readable_on(Color32::from_rgb(180, 53, 65)),
+                warn: Color32::from_rgb(134, 94, 15),
                 warn_soft: Color32::from_rgba_unmultiplied(200, 150, 40, 26),
-                ok: Color32::from_rgb(30, 140, 92),
+                ok: Color32::from_rgb(24, 114, 75),
                 ok_soft: Color32::from_rgba_unmultiplied(30, 140, 92, 22),
                 hover_layer: Color32::from_rgba_unmultiplied(0, 0, 0, 14),
                 press_layer: Color32::from_rgba_unmultiplied(0, 0, 0, 24),
                 dark: false,
             },
         }
+    }
+}
+
+/// Composite a translucent colour onto an opaque one.
+#[cfg(test)]
+pub fn over(fg: Color32, bg: Color32) -> Color32 {
+    // Color32 stores premultiplied channels, so the foreground is added as-is.
+    let a = fg.a() as f32 / 255.0;
+    let mix = |f: u8, b: u8| (f as f32 + b as f32 * (1.0 - a)).round().min(255.0) as u8;
+    Color32::from_rgb(
+        mix(fg.r(), bg.r()),
+        mix(fg.g(), bg.g()),
+        mix(fg.b(), bg.b()),
+    )
+}
+
+fn luminance(c: Color32) -> f32 {
+    let ch = |v: u8| {
+        let v = v as f32 / 255.0;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * ch(c.r()) + 0.7152 * ch(c.g()) + 0.0722 * ch(c.b())
+}
+
+/// WCAG 2.1 contrast ratio between two opaque colours, 1.0 .. 21.0.
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    let (hi, lo) = (la.max(lb), la.min(lb));
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// Black or near-black, whichever is more readable on `bg`.
+pub fn readable_on(bg: Color32) -> Color32 {
+    let dark = Color32::from_rgb(11, 14, 20);
+    let light = Color32::from_rgb(255, 255, 255);
+    if contrast(dark, bg) >= contrast(light, bg) {
+        dark
+    } else {
+        light
+    }
+}
+
+/// Ink for text sitting on a light theme's `accent_soft` fill.
+fn ink_on_light(accent: Color32) -> Color32 {
+    match (accent.r(), accent.g(), accent.b()) {
+        (56, 132, 255) => Color32::from_rgb(41, 96, 186),
+        (32, 178, 170) => Color32::from_rgb(20, 112, 107),
+        (139, 108, 246) => Color32::from_rgb(106, 82, 187),
+        (233, 168, 60) => Color32::from_rgb(133, 96, 34),
+        (232, 93, 124) => Color32::from_rgb(165, 66, 88),
+        (58, 183, 120) => Color32::from_rgb(37, 115, 76),
+        other => Color32::from_rgb(other.0 * 3 / 4, other.1 * 3 / 4, other.2 * 3 / 4),
     }
 }
 
@@ -156,13 +224,13 @@ pub fn apply(ctx: &egui::Context, mode: ThemeMode, accent: Accent, density: Dens
         Color32::from_rgb(243, 245, 249)
     };
     w.inactive.weak_bg_fill = w.inactive.bg_fill;
-    w.inactive.bg_stroke = Stroke::new(1.0, p.border);
+    w.inactive.bg_stroke = Stroke::new(1.0, p.outline);
     w.inactive.fg_stroke = Stroke::new(1.0, p.text);
     w.inactive.corner_radius = CornerRadius::same(R_SM);
 
     w.hovered.bg_fill = p.card_hover;
     w.hovered.weak_bg_fill = p.card_hover;
-    w.hovered.bg_stroke = Stroke::new(1.0, p.border_strong);
+    w.hovered.bg_stroke = Stroke::new(1.0, p.outline);
     w.hovered.fg_stroke = Stroke::new(1.5, p.text);
     w.hovered.corner_radius = CornerRadius::same(R_SM);
 
@@ -174,7 +242,7 @@ pub fn apply(ctx: &egui::Context, mode: ThemeMode, accent: Accent, density: Dens
 
     w.open.bg_fill = p.card_hover;
     w.open.weak_bg_fill = p.card_hover;
-    w.open.bg_stroke = Stroke::new(1.0, p.border_strong);
+    w.open.bg_stroke = Stroke::new(1.0, p.outline);
     w.open.fg_stroke = Stroke::new(1.0, p.text);
     w.open.corner_radius = CornerRadius::same(R_SM);
 
@@ -377,6 +445,70 @@ mod tests {
                 p.press_layer.a() < 60,
                 "a state layer must never hide the fill"
             );
+        }
+    }
+    #[test]
+    fn every_text_role_clears_wcag_aa() {
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            for accent in Accent::ALL {
+                let p = Palette::new(mode, accent);
+                for bg in [p.bg, p.bg_alt, p.panel, p.card, p.card_hover] {
+                    for (role, fg) in [
+                        ("text", p.text),
+                        ("text_dim", p.text_dim),
+                        ("text_faint", p.text_faint),
+                    ] {
+                        let r = contrast(fg, bg);
+                        assert!(r >= 4.5, "{mode:?} {accent:?}: {role} on {bg:?} is {r:.2}");
+                    }
+                }
+                // The accent ink is used on its own translucent fill and as a
+                // plain text colour, so both have to clear the bar.
+                for bg in [p.panel, p.card, p.card_hover, p.bg, p.bg_alt] {
+                    let soft = over(p.accent_soft, bg);
+                    let r = contrast(p.accent_text, soft);
+                    assert!(
+                        r >= 4.5,
+                        "{mode:?} {accent:?}: accent_text on soft over {bg:?} is {r:.2}"
+                    );
+                    let r = contrast(p.accent_text, bg);
+                    assert!(
+                        r >= 4.5,
+                        "{mode:?} {accent:?}: accent_text on {bg:?} is {r:.2}"
+                    );
+                }
+                // Labels on filled surfaces, and semantic ink on its own fill.
+                let r = contrast(p.on_accent, p.accent);
+                assert!(r >= 4.5, "{mode:?} {accent:?}: on_accent is {r:.2}");
+                let r = contrast(p.on_danger, p.danger);
+                assert!(r >= 4.5, "{mode:?} {accent:?}: on_danger is {r:.2}");
+                for bg in [p.panel, p.card, p.card_hover] {
+                    for (name, ink, soft) in [
+                        ("danger", p.danger, p.danger_soft),
+                        ("warn", p.warn, p.warn_soft),
+                        ("ok", p.ok, p.ok_soft),
+                    ] {
+                        let r = contrast(ink, over(soft, bg));
+                        assert!(
+                            r >= 4.5,
+                            "{mode:?} {accent:?}: {name} on its fill over {bg:?} is {r:.2}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn control_outlines_clear_the_three_to_one_bar() {
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            for accent in Accent::ALL {
+                let p = Palette::new(mode, accent);
+                for bg in [p.bg, p.bg_alt, p.panel, p.card, p.card_hover] {
+                    let r = contrast(p.outline, bg);
+                    assert!(r >= 3.0, "{mode:?} {accent:?}: outline on {bg:?} is {r:.2}");
+                }
+            }
         }
     }
 }

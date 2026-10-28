@@ -281,7 +281,7 @@ pub enum Btn {
 /// overlay marks hover and press, which .fill() on its own would suppress.
 pub fn button(ui: &mut Ui, p: &Palette, label: &str, kind: Btn, w: f32, h: f32) -> Response {
     let (fg, fill, stroke) = match kind {
-        Btn::Filled => (Color32::WHITE, p.accent, Stroke::NONE),
+        Btn::Filled => (p.on_accent, p.accent, Stroke::NONE),
         Btn::Text => (p.text_dim, Color32::TRANSPARENT, Stroke::NONE),
         Btn::DangerTonal => (p.danger, p.danger_soft, Stroke::NONE),
     };
@@ -301,8 +301,10 @@ pub fn button_colored(
     w: f32,
     h: f32,
 ) -> Response {
+    // The label is painted by hand so the state layer can go underneath it;
+    // a Button that draws its own text would tint the text, not the fill.
     let resp = ui.add(
-        egui::Button::new(egui::RichText::new(label).color(fg).size(T_UI))
+        egui::Button::new("")
             .fill(fill)
             .stroke(stroke)
             .corner_radius(CornerRadius::same(R_PILL))
@@ -319,6 +321,13 @@ pub fn button_colored(
         ui.painter()
             .rect_filled(resp.rect, CornerRadius::same(R_PILL), layer);
     }
+    ui.painter().text(
+        resp.rect.center(),
+        Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(T_UI),
+        fg,
+    );
     resp
 }
 
@@ -334,7 +343,7 @@ pub fn segment(ui: &mut Ui, p: &Palette, label: &str, selected: bool, w: f32) ->
         } else {
             Color32::TRANSPARENT
         },
-        Stroke::new(1.0, if selected { p.accent } else { p.border }),
+        Stroke::new(1.0, if selected { p.accent } else { p.outline }),
         w,
         30.0,
     )
@@ -397,7 +406,7 @@ pub fn card_rect_style(ui: &mut Ui, ctx: &Ctx, w: f32, h: f32, selected: bool) -
     } else if hovered {
         Stroke::new(1.0, p.border_strong)
     } else {
-        Stroke::new(1.0, p.border)
+        Stroke::new(1.0, p.outline)
     };
     ui.painter().rect(
         rect,
