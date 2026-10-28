@@ -15,10 +15,14 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
 jobs:
   build:
     # windows-2022 = Server 2022 image, ships MSVC + SDK, matches Win10 ABI.
     runs-on: windows-2022
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -34,15 +38,17 @@ jobs:
         run: cargo fmt --check
 
       - name: clippy
-        run: cargo clippy --release -- -D warnings
+        # --locked: a Dependabot PR must ship a matching Cargo.lock, otherwise
+        # CI resolves silently and the committed lock can rot.
+        run: cargo clippy --release --locked -- -D warnings
 
       - name: test
-        run: cargo test --release
+        run: cargo test --release --locked
 
       - name: selftest
         # `cargo run` builds the binary as well: `cargo test` only produces
         # test executables, so target\release\appsweep.exe does not exist yet.
-        run: cargo run --release -- --selftest
+        run: cargo run --release --locked -- --selftest
 
       - uses: actions/upload-artifact@v4
         with:
@@ -50,3 +56,16 @@ jobs:
           path: |
             target/release/appsweep.exe
             release/README.txt
+
+  # Runs on every PR, so a Dependabot bump is screened for known high/critical
+  # vulnerabilities before the Windows build above is even finished. Public
+  # repo only: the dependency-graph diff API is free here.
+  deps:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: high
