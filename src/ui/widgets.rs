@@ -7,7 +7,7 @@
 
 use crate::icons::IconCache;
 use crate::model::AppEntry;
-use crate::theme::Palette;
+use crate::theme::{Palette, R_CARD, R_PILL, R_SM, R_XS, T_LABEL, T_TITLE, T_UI};
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{
     pos2, vec2, Align, Align2, Color32, CornerRadius, FontId, Rect, Response, Sense, Stroke,
@@ -179,7 +179,7 @@ pub fn pill(
     }
     ui.painter().rect_filled(
         rect,
-        CornerRadius::same(7),
+        CornerRadius::same(R_PILL),
         if hovered { bg_hover } else { bg },
     );
     ui.painter().text(
@@ -216,7 +216,7 @@ pub fn star(
         rect.center(),
         Align2::CENTER_CENTER,
         if active { "★" } else { "☆" },
-        FontId::proportional(15.0),
+        FontId::proportional(T_TITLE),
         color,
     );
     resp
@@ -225,10 +225,10 @@ pub fn star(
 pub fn chip(ui: &mut Ui, text: &str, fg: Color32, bg: Color32) {
     let galley = ui
         .painter()
-        .layout_no_wrap(text.to_string(), FontId::proportional(11.0), fg);
+        .layout_no_wrap(text.to_string(), FontId::proportional(T_LABEL), fg);
     let size = galley.size() + vec2(14.0, 6.0);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
+    ui.painter().rect_filled(rect, CornerRadius::same(R_XS), bg);
     ui.painter()
         .galley(rect.center() - galley.size() * 0.5, galley, fg);
 }
@@ -263,10 +263,81 @@ pub fn chip_left(
     let w = galley.size().x + 12.0;
     let h = galley.size().y + 6.0;
     let rect = Rect::from_min_size(pos2(left, top), vec2(w, h));
-    ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
+    ui.painter().rect_filled(rect, CornerRadius::same(R_XS), bg);
     ui.painter()
         .galley(rect.center() - galley.size() * 0.5, galley, fg);
     rect
+}
+
+/// Material button role.
+#[derive(Clone, Copy)]
+pub enum Btn {
+    Filled,
+    Text,
+    DangerTonal,
+}
+
+/// A button with a Material state layer: the fill stays put and a translucent
+/// overlay marks hover and press, which .fill() on its own would suppress.
+pub fn button(ui: &mut Ui, p: &Palette, label: &str, kind: Btn, w: f32, h: f32) -> Response {
+    let (fg, fill, stroke) = match kind {
+        Btn::Filled => (Color32::WHITE, p.accent, Stroke::NONE),
+        Btn::Text => (p.text_dim, Color32::TRANSPARENT, Stroke::NONE),
+        Btn::DangerTonal => (p.danger, p.danger_soft, Stroke::NONE),
+    };
+    button_colored(ui, p, label, fg, fill, stroke, w, h)
+}
+
+/// Same as [utton] but with colours the caller picks, for the few buttons
+/// whose state is expressed by colour alone (disabled, launch, backup rows).
+#[allow(clippy::too_many_arguments)]
+pub fn button_colored(
+    ui: &mut Ui,
+    p: &Palette,
+    label: &str,
+    fg: Color32,
+    fill: Color32,
+    stroke: Stroke,
+    w: f32,
+    h: f32,
+) -> Response {
+    let resp = ui.add(
+        egui::Button::new(egui::RichText::new(label).color(fg).size(T_UI))
+            .fill(fill)
+            .stroke(stroke)
+            .corner_radius(CornerRadius::same(R_PILL))
+            .min_size(vec2(w, h)),
+    );
+    let layer = if resp.is_pointer_button_down_on() {
+        p.press_layer
+    } else if resp.hovered() {
+        p.hover_layer
+    } else {
+        Color32::TRANSPARENT
+    };
+    if layer.a() > 0 {
+        ui.painter()
+            .rect_filled(resp.rect, CornerRadius::same(R_PILL), layer);
+    }
+    resp
+}
+
+/// Segmented-control option: outlined when idle, tinted when selected.
+pub fn segment(ui: &mut Ui, p: &Palette, label: &str, selected: bool, w: f32) -> Response {
+    button_colored(
+        ui,
+        p,
+        label,
+        if selected { p.accent_text } else { p.text_dim },
+        if selected {
+            p.accent_soft
+        } else {
+            Color32::TRANSPARENT
+        },
+        Stroke::new(1.0, if selected { p.accent } else { p.border }),
+        w,
+        30.0,
+    )
 }
 
 pub fn paint_icon(ui: &mut Ui, ctx: &Ctx, app: &AppEntry, rect: Rect, size: u32) {
@@ -287,7 +358,7 @@ pub fn paint_icon(ui: &mut Ui, ctx: &Ctx, app: &AppEntry, rect: Rect, size: u32)
         None => {
             // Placeholder: rounded square with the first letter of the name.
             ui.painter()
-                .rect_filled(rect, CornerRadius::same(9), p.accent_soft);
+                .rect_filled(rect, CornerRadius::same(R_SM), p.accent_soft);
             let letter = app
                 .name
                 .chars()
@@ -330,7 +401,7 @@ pub fn card_rect_style(ui: &mut Ui, ctx: &Ctx, w: f32, h: f32, selected: bool) -
     };
     ui.painter().rect(
         rect,
-        CornerRadius::same(12),
+        CornerRadius::same(R_CARD),
         fill,
         stroke,
         StrokeKind::Inside,

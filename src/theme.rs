@@ -1,6 +1,21 @@
 use crate::settings::{Accent, Density, ThemeMode};
 use egui::{Color32, CornerRadius, FontFamily, FontId, Stroke, TextStyle};
 
+// Material 3 shape scale, in points.
+pub const R_XS: u8 = 8; // chips, badges
+pub const R_SM: u8 = 12; // inputs, small frames
+pub const R_CARD: u8 = 16; // cards, option rows
+pub const R_LG: u8 = 20; // panels
+pub const R_XL: u8 = 28; // dialogs
+pub const R_PILL: u8 = 255; // fully rounded: buttons, filter pills (egui clamps to half the height)
+
+// Material 3 type scale, in points.
+pub const T_LABEL: f32 = 11.0;
+pub const T_BODY: f32 = 12.0;
+pub const T_UI: f32 = 14.0;
+pub const T_TITLE: f32 = 16.0;
+pub const T_HEADLINE: f32 = 20.0;
+
 #[derive(Clone)]
 pub struct Palette {
     pub bg: Color32,
@@ -22,6 +37,10 @@ pub struct Palette {
     pub warn_soft: Color32,
     pub ok: Color32,
     pub ok_soft: Color32,
+    /// Translucent overlay for hover and press, so a control keeps its own
+    /// fill colour while still showing the pointer state.
+    pub hover_layer: Color32,
+    pub press_layer: Color32,
     pub dark: bool,
 }
 
@@ -54,6 +73,8 @@ impl Palette {
                 warn_soft: Color32::from_rgba_unmultiplied(238, 178, 78, 32),
                 ok: Color32::from_rgb(78, 198, 138),
                 ok_soft: Color32::from_rgba_unmultiplied(78, 198, 138, 32),
+                hover_layer: Color32::from_rgba_unmultiplied(255, 255, 255, 20),
+                press_layer: Color32::from_rgba_unmultiplied(255, 255, 255, 32),
                 dark: true,
             },
             ThemeMode::Light => Self {
@@ -80,6 +101,8 @@ impl Palette {
                 warn_soft: Color32::from_rgba_unmultiplied(200, 150, 40, 26),
                 ok: Color32::from_rgb(30, 140, 92),
                 ok_soft: Color32::from_rgba_unmultiplied(30, 140, 92, 22),
+                hover_layer: Color32::from_rgba_unmultiplied(0, 0, 0, 14),
+                press_layer: Color32::from_rgba_unmultiplied(0, 0, 0, 24),
                 dark: false,
             },
         }
@@ -112,8 +135,8 @@ pub fn apply(ctx: &egui::Context, mode: ThemeMode, accent: Accent, density: Dens
     };
     visuals.faint_bg_color = p.bg_alt;
     visuals.window_stroke = Stroke::new(1.0, p.border);
-    visuals.window_corner_radius = CornerRadius::same(12);
-    visuals.menu_corner_radius = CornerRadius::same(10);
+    visuals.window_corner_radius = CornerRadius::same(R_LG);
+    visuals.menu_corner_radius = CornerRadius::same(R_SM);
     visuals.selection.bg_fill = p.accent_soft;
     visuals.selection.stroke = Stroke::new(1.0, p.accent);
     visuals.hyperlink_color = p.accent;
@@ -125,7 +148,7 @@ pub fn apply(ctx: &egui::Context, mode: ThemeMode, accent: Accent, density: Dens
     w.noninteractive.weak_bg_fill = p.bg_alt;
     w.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
     w.noninteractive.fg_stroke = Stroke::new(1.0, p.text_dim);
-    w.noninteractive.corner_radius = CornerRadius::same(8);
+    w.noninteractive.corner_radius = CornerRadius::same(R_SM);
 
     w.inactive.bg_fill = if p.dark {
         Color32::from_rgb(30, 37, 50)
@@ -135,29 +158,29 @@ pub fn apply(ctx: &egui::Context, mode: ThemeMode, accent: Accent, density: Dens
     w.inactive.weak_bg_fill = w.inactive.bg_fill;
     w.inactive.bg_stroke = Stroke::new(1.0, p.border);
     w.inactive.fg_stroke = Stroke::new(1.0, p.text);
-    w.inactive.corner_radius = CornerRadius::same(8);
+    w.inactive.corner_radius = CornerRadius::same(R_SM);
 
     w.hovered.bg_fill = p.card_hover;
     w.hovered.weak_bg_fill = p.card_hover;
     w.hovered.bg_stroke = Stroke::new(1.0, p.border_strong);
     w.hovered.fg_stroke = Stroke::new(1.5, p.text);
-    w.hovered.corner_radius = CornerRadius::same(8);
+    w.hovered.corner_radius = CornerRadius::same(R_SM);
 
     w.active.bg_fill = p.accent_soft;
     w.active.weak_bg_fill = p.accent_soft;
     w.active.bg_stroke = Stroke::new(1.0, p.accent);
     w.active.fg_stroke = Stroke::new(1.5, p.text);
-    w.active.corner_radius = CornerRadius::same(8);
+    w.active.corner_radius = CornerRadius::same(R_SM);
 
     w.open.bg_fill = p.card_hover;
     w.open.weak_bg_fill = p.card_hover;
     w.open.bg_stroke = Stroke::new(1.0, p.border_strong);
     w.open.fg_stroke = Stroke::new(1.0, p.text);
-    w.open.corner_radius = CornerRadius::same(8);
+    w.open.corner_radius = CornerRadius::same(R_SM);
 
     style.visuals = visuals;
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-    style.spacing.button_padding = egui::vec2(12.0, 6.0);
+    style.spacing.button_padding = egui::vec2(14.0, 8.0);
     style.spacing.menu_margin = egui::Margin::same(8);
     style.spacing.indent = 16.0;
     style.spacing.scroll.bar_width = 9.0;
@@ -332,6 +355,28 @@ mod tests {
             let p = Palette::new(ThemeMode::Dark, a);
             assert!(p.accent_text.r() >= p.accent.r());
             assert!(p.accent_text.g() >= p.accent.g());
+        }
+    }
+
+    #[test]
+    fn shape_and_type_scales_are_ordered() {
+        // A stray out-of-scale value is invisible in code review but shows up
+        // as one control with a different corner or size than its neighbours.
+        assert!(R_XS < R_SM && R_SM < R_CARD && R_CARD < R_LG && R_LG < R_XL);
+        assert!(R_PILL > R_XL);
+        assert!(T_LABEL < T_BODY && T_BODY < T_UI && T_UI < T_TITLE && T_TITLE < T_HEADLINE);
+    }
+
+    #[test]
+    fn state_layers_stay_translucent() {
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            let p = Palette::new(mode, Accent::Blue);
+            assert!(p.hover_layer.a() > 0);
+            assert!(p.hover_layer.a() < p.press_layer.a());
+            assert!(
+                p.press_layer.a() < 60,
+                "a state layer must never hide the fill"
+            );
         }
     }
 }

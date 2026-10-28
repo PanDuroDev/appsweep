@@ -1,6 +1,6 @@
 //! Modal dialogs: confirmation flow, live job progress, details and settings.
 
-use super::widgets::{self, bidi_line, text_fit};
+use super::widgets::{self, bidi_line, text_fit, Btn};
 use crate::actions::{Flow, Job, StepStatus};
 use crate::model::{human_size, AppEntry, Source};
 use crate::settings::{Accent, Density, Settings, SortKey, ThemeMode, ViewMode};
@@ -57,7 +57,7 @@ fn modal_frame(p: &Palette) -> Frame {
     Frame::NONE
         .fill(p.panel)
         .stroke(Stroke::new(1.0, p.border_strong))
-        .corner_radius(CornerRadius::same(14))
+        .corner_radius(CornerRadius::same(theme::R_XL))
         .inner_margin(Margin::same(20))
         .shadow(egui::Shadow {
             offset: [0, 8],
@@ -70,7 +70,11 @@ fn modal_frame(p: &Palette) -> Frame {
 fn title(ui: &mut Ui, p: &Palette, text: &str) {
     ui.horizontal(|ui| {
         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-            ui.label(RichText::new(text).font(theme::bold(18.0)).color(p.text));
+            ui.label(
+                RichText::new(text)
+                    .font(theme::bold(theme::T_HEADLINE))
+                    .color(p.text),
+            );
         });
     });
 }
@@ -82,13 +86,13 @@ fn field(ui: &mut Ui, p: &Palette, label: &str, value: &str, mono: bool) {
         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
             ui.label(
                 RichText::new(label)
-                    .font(FontId::proportional(12.5))
+                    .font(FontId::proportional(theme::T_BODY))
                     .color(p.text_faint),
             );
             let font = if mono {
                 FontId::monospace(11.5)
             } else {
-                FontId::proportional(12.5)
+                FontId::proportional(theme::T_BODY)
             };
             if value.is_empty() {
                 ui.label(RichText::new("—").font(font).color(p.text_faint));
@@ -116,7 +120,7 @@ fn section(ui: &mut Ui, p: &Palette, text: &str) {
         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
             ui.label(
                 RichText::new(text)
-                    .font(theme::bold(12.5))
+                    .font(theme::bold(theme::T_BODY))
                     .color(p.accent_text),
             );
         });
@@ -165,7 +169,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 62.0), Sense::hover());
     ui.painter().rect(
         rect,
-        CornerRadius::same(10),
+        CornerRadius::same(theme::R_CARD),
         p.card,
         Stroke::new(1.0, p.border),
         StrokeKind::Inside,
@@ -178,7 +182,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
         ui,
         name_rect,
         &st.app.name,
-        theme::bold(15.0),
+        theme::bold(theme::T_TITLE),
         p.text,
         Align2::LEFT_CENTER,
     );
@@ -236,7 +240,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
                         } else {
                             Stroke::new(1.0, p.border)
                         };
-                        ui.painter().rect(r, CornerRadius::same(9), bg, stroke, StrokeKind::Inside);
+                        ui.painter().rect(r, CornerRadius::same(theme::R_CARD), bg, stroke, StrokeKind::Inside);
                         if resp.hovered() {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
@@ -253,12 +257,12 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
                             pos2(r.left() + 34.0, r.top() + 8.0),
                             pos2(r.right() - 12.0, r.top() + 28.0),
                         );
-                        text_fit(ui, lr, label, theme::bold(13.5), p.text, Align2::LEFT_CENTER);
+                        text_fit(ui, lr, label, theme::bold(theme::T_UI), p.text, Align2::LEFT_CENTER);
                         let dr = Rect::from_min_max(
                             pos2(r.left() + 34.0, r.top() + 28.0),
                             pos2(r.right() - 12.0, r.top() + 48.0),
                         );
-                        text_fit(ui, dr, desc, FontId::proportional(11.5), p.text_dim, Align2::LEFT_CENTER);
+                        text_fit(ui, dr, desc, FontId::proportional(theme::T_BODY), p.text_dim, Align2::LEFT_CENTER);
                         if resp.clicked() {
                             st.flow = flow;
                         }
@@ -286,23 +290,10 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let go =
-                    egui::Button::new(RichText::new("Continue").font(FontId::proportional(13.5)))
-                        .fill(p.accent)
-                        .corner_radius(CornerRadius::same(8))
-                        .min_size(vec2(110.0, 34.0));
-                if ui.add(go).clicked() {
+                if widgets::button(ui, p, "Continue", Btn::Filled, 110.0, 34.0).clicked() {
                     st.stage = 1;
                 }
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("Cancel").color(p.text_dim))
-                            .fill(p.card)
-                            .corner_radius(CornerRadius::same(8))
-                            .min_size(vec2(88.0, 34.0)),
-                    )
-                    .clicked()
-                {
+                if widgets::button(ui, p, "Cancel", Btn::Text, 88.0, 34.0).clicked() {
                     asked = Asked::Close;
                 }
             });
@@ -315,7 +306,8 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
     let accent = if danger { p.danger } else { p.warn };
     let soft = if danger { p.danger_soft } else { p.warn_soft };
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), Sense::hover());
-    ui.painter().rect_filled(r, CornerRadius::same(9), soft);
+    ui.painter()
+        .rect_filled(r, CornerRadius::same(theme::R_CARD), soft);
     let warn_rect = Rect::from_min_max(
         pos2(r.left() + 12.0, r.top() + 6.0),
         pos2(r.right() - 12.0, r.bottom() - 6.0),
@@ -327,7 +319,13 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
     } else {
         "The official uninstaller will run, then the fallbacks when needed."
     };
-    bidi_line(ui, warn_rect, warn_text, FontId::proportional(12.5), accent);
+    bidi_line(
+        ui,
+        warn_rect,
+        warn_text,
+        FontId::proportional(theme::T_BODY),
+        accent,
+    );
 
     ui.add_space(10.0);
     let steps = [
@@ -349,14 +347,18 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
                     c,
                     Align2::CENTER_CENTER,
                     format!("{}", i + 1),
-                    FontId::proportional(10.0),
+                    FontId::proportional(theme::T_LABEL),
                     p.accent_text,
                 );
                 ui.add_space(22.0);
-                ui.label(RichText::new(*t).font(theme::bold(12.5)).color(p.text));
+                ui.label(
+                    RichText::new(*t)
+                        .font(theme::bold(theme::T_BODY))
+                        .color(p.text),
+                );
                 ui.label(
                     RichText::new(*d)
-                        .font(FontId::proportional(11.5))
+                        .font(FontId::proportional(theme::T_BODY))
                         .color(p.text_faint),
                 );
             });
@@ -387,14 +389,14 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 ui.label(
                     RichText::new("Type the ID number to confirm")
-                        .font(FontId::proportional(11.5))
+                        .font(FontId::proportional(theme::T_BODY))
                         .color(p.text_dim),
                 );
                 let color = if typed_ok { p.ok } else { p.text };
                 ui.add(
                     egui::TextEdit::singleline(&mut st.typed)
                         .desired_width(120.0)
-                        .font(FontId::proportional(13.0))
+                        .font(FontId::proportional(theme::T_UI))
                         .text_color(color)
                         .hint_text(format!("{}", st.app.id)),
                 );
@@ -409,7 +411,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
                                 .color(p.accent_text),
                         )
                         .fill(p.accent_soft)
-                        .corner_radius(CornerRadius::same(6))
+                        .corner_radius(CornerRadius::same(theme::R_XS))
                         .min_size(vec2(64.0, 24.0)),
                     )
                     .on_hover_text("Copy this number")
@@ -425,25 +427,32 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let armed = st.ack && typed_ok;
-            let go = egui::Button::new(
-                RichText::new(if danger {
-                    "Delete permanently now"
-                } else {
-                    "Start uninstall"
-                })
-                .font(FontId::proportional(13.5))
-                .color(if armed { Color32::WHITE } else { p.text_faint }),
-            )
-            .fill(if !armed {
-                p.card_hover
+            let (fg, fill) = if !armed {
+                (p.text_faint, p.card_hover)
             } else if danger {
-                p.danger
+                (Color32::WHITE, p.danger)
             } else {
-                p.accent
-            })
-            .corner_radius(CornerRadius::same(8))
-            .min_size(vec2(150.0, 36.0));
-            if ui.add_enabled(armed, go).clicked() {
+                (Color32::WHITE, p.accent)
+            };
+            let go = ui
+                .add_enabled_ui(armed, |ui| {
+                    widgets::button_colored(
+                        ui,
+                        p,
+                        if danger {
+                            "Delete permanently now"
+                        } else {
+                            "Start uninstall"
+                        },
+                        fg,
+                        fill,
+                        Stroke::NONE,
+                        150.0,
+                        36.0,
+                    )
+                })
+                .inner;
+            if go.clicked() {
                 asked = Asked::Confirm {
                     app_id: st.app.id,
                     flow: st.flow,
@@ -451,26 +460,10 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
                     keep_data: st.keep_data,
                 };
             }
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("Back").color(p.text_dim))
-                        .fill(p.card)
-                        .corner_radius(CornerRadius::same(8))
-                        .min_size(vec2(88.0, 36.0)),
-                )
-                .clicked()
-            {
+            if widgets::button(ui, p, "Back", Btn::Text, 88.0, 36.0).clicked() {
                 st.stage = 0;
             }
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("Cancel").color(p.text_dim))
-                        .fill(p.card)
-                        .corner_radius(CornerRadius::same(8))
-                        .min_size(vec2(88.0, 36.0)),
-                )
-                .clicked()
-            {
+            if widgets::button(ui, p, "Cancel", Btn::Text, 88.0, 36.0).clicked() {
                 asked = Asked::Close;
             }
         });
@@ -496,7 +489,7 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
             );
             ui.label(
                 RichText::new(&job.app_name)
-                    .font(theme::bold(13.0))
+                    .font(theme::bold(theme::T_UI))
                     .color(p.text_dim),
             );
         });
@@ -544,7 +537,7 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
                     ic,
                     Align2::CENTER_CENTER,
                     label,
-                    FontId::proportional(10.0),
+                    FontId::proportional(theme::T_LABEL),
                     col,
                 );
                 let tr = Rect::from_min_max(
@@ -555,7 +548,7 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
                     ui,
                     tr,
                     &st.title,
-                    theme::bold(12.5),
+                    theme::bold(theme::T_BODY),
                     p.text,
                     Align2::LEFT_CENTER,
                 );
@@ -566,7 +559,13 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
                 let detail = &st.detail;
                 // Details often embed Latin paths, so they need the bidi-aware
                 // painter instead of plain left-to-right layout.
-                widgets::bidi_line(ui, dr, detail, FontId::proportional(11.0), p.text_faint);
+                widgets::bidi_line(
+                    ui,
+                    dr,
+                    detail,
+                    FontId::proportional(theme::T_LABEL),
+                    p.text_faint,
+                );
             }
         });
 
@@ -583,37 +582,21 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
                 // Banner behind the result so the outcome is unmistakable.
                 egui::Frame::NONE
                     .fill(bg)
-                    .corner_radius(CornerRadius::same(8))
+                    .corner_radius(CornerRadius::same(theme::R_SM))
                     .inner_margin(Margin::symmetric(10, 6))
                     .show(ui, |ui| {
-                        ui.label(RichText::new(txt).font(theme::bold(13.0)).color(col));
+                        ui.label(RichText::new(txt).font(theme::bold(theme::T_UI)).color(col));
                     });
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("Close").color(Color32::WHITE))
-                            .fill(p.accent)
-                            .corner_radius(CornerRadius::same(8))
-                            .min_size(vec2(96.0, 34.0)),
-                    )
-                    .clicked()
-                {
+                if widgets::button(ui, p, "Close", Btn::Filled, 96.0, 34.0).clicked() {
                     asked = Asked::Close;
                 }
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("Rescan").color(p.text_dim))
-                            .fill(p.card)
-                            .corner_radius(CornerRadius::same(8))
-                            .min_size(vec2(110.0, 34.0)),
-                    )
-                    .clicked()
-                {
+                if widgets::button(ui, p, "Rescan", Btn::Text, 110.0, 34.0).clicked() {
                     asked = Asked::Rescan;
                 }
             } else {
                 ui.label(
                     RichText::new("Running, do not close the app")
-                        .font(FontId::proportional(12.0))
+                        .font(FontId::proportional(theme::T_BODY))
                         .color(p.text_dim),
                 );
             }
@@ -638,7 +621,7 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.label(
                         RichText::new(&app.name)
-                            .font(theme::bold(17.0))
+                            .font(theme::bold(theme::T_HEADLINE))
                             .color(p.text),
                     );
                 });
@@ -650,15 +633,17 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
                     } else {
                         app.source.label()
                     };
-                    ui.label(RichText::new(src).font(FontId::proportional(12.0)).color(
-                        if app.is_remnant() {
-                            p.danger
-                        } else if app.is_system {
-                            p.warn
-                        } else {
-                            p.text_dim
-                        },
-                    ));
+                    ui.label(
+                        RichText::new(src)
+                            .font(FontId::proportional(theme::T_BODY))
+                            .color(if app.is_remnant() {
+                                p.danger
+                            } else if app.is_system {
+                                p.warn
+                            } else {
+                                p.text_dim
+                            }),
+                    );
                 });
             });
         });
@@ -760,7 +745,7 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
                     .desired_width(ui.available_width())
                     .desired_rows(2)
                     .hint_text("Write a note about this app")
-                    .font(FontId::proportional(12.5)),
+                    .font(FontId::proportional(theme::T_BODY)),
             );
             if notes != app.notes {
                 asked = Asked::SetNotes {
@@ -775,7 +760,7 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.label(
                         RichText::new("Without administrator rights")
-                            .font(FontId::proportional(11.5))
+                            .font(FontId::proportional(theme::T_BODY))
                             .color(p.warn),
                     );
                 });
@@ -787,24 +772,22 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             // Protected folders must not offer a delete button that looks live.
             let blocked = app.blocked_reason();
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("Purge").color(if blocked.is_some() {
-                        p.text_faint
-                    } else {
-                        p.danger
-                    }))
-                    .fill(if blocked.is_some() {
-                        p.card
-                    } else {
-                        p.danger_soft
-                    })
-                    .corner_radius(CornerRadius::same(8))
-                    .min_size(vec2(100.0, 34.0)),
+            let purge = if blocked.is_some() {
+                widgets::button_colored(
+                    ui,
+                    p,
+                    "Purge",
+                    p.text_faint,
+                    p.card,
+                    Stroke::NONE,
+                    100.0,
+                    34.0,
                 )
-                .on_hover_text(blocked.unwrap_or("Permanent deletion of every root and leftover"))
-                .clicked()
-            {
+            } else {
+                widgets::button(ui, p, "Purge", Btn::DangerTonal, 100.0, 34.0)
+            }
+            .on_hover_text(blocked.unwrap_or("Permanent deletion of every root and leftover"));
+            if purge.clicked() {
                 asked = Asked::Confirm {
                     app_id: app.id,
                     flow: Flow::Purge,
@@ -812,24 +795,26 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
                     keep_data: false,
                 };
             }
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("Uninstall").color(if blocked.is_some() {
-                        p.text_faint
-                    } else {
-                        p.accent_text
-                    }))
-                    .fill(if blocked.is_some() {
-                        p.card
-                    } else {
-                        p.accent_soft
-                    })
-                    .corner_radius(CornerRadius::same(8))
-                    .min_size(vec2(88.0, 34.0)),
-                )
-                .on_hover_text(blocked.unwrap_or("Run the uninstaller with automatic fallbacks"))
-                .clicked()
-            {
+            let uninstall = widgets::button_colored(
+                ui,
+                p,
+                "Uninstall",
+                if blocked.is_some() {
+                    p.text_faint
+                } else {
+                    p.accent_text
+                },
+                if blocked.is_some() {
+                    p.card
+                } else {
+                    p.accent_soft
+                },
+                Stroke::NONE,
+                88.0,
+                34.0,
+            )
+            .on_hover_text(blocked.unwrap_or("Run the uninstaller with automatic fallbacks"));
+            if uninstall.clicked() {
                 asked = Asked::Confirm {
                     app_id: app.id,
                     flow: Flow::Uninstall,
@@ -838,48 +823,27 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
                 };
             }
             if app.launch_exe.is_some()
-                && ui
-                    .add(
-                        egui::Button::new(RichText::new("Launch").color(p.ok))
-                            .fill(p.card)
-                            .corner_radius(CornerRadius::same(8))
-                            .min_size(vec2(80.0, 34.0)),
-                    )
-                    .clicked()
+                && widgets::button_colored(
+                    ui,
+                    p,
+                    "Launch",
+                    p.ok,
+                    Color32::TRANSPARENT,
+                    Stroke::NONE,
+                    80.0,
+                    34.0,
+                )
+                .clicked()
             {
                 asked = Asked::Run(app.id);
             }
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("Open folder").color(p.text_dim))
-                        .fill(p.card)
-                        .corner_radius(CornerRadius::same(8))
-                        .min_size(vec2(104.0, 34.0)),
-                )
-                .clicked()
-            {
+            if widgets::button(ui, p, "Open folder", Btn::Text, 104.0, 34.0).clicked() {
                 asked = Asked::OpenFolder(app.id);
             }
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("Copy path").color(p.text_dim))
-                        .fill(p.card)
-                        .corner_radius(CornerRadius::same(8))
-                        .min_size(vec2(104.0, 34.0)),
-                )
-                .clicked()
-            {
+            if widgets::button(ui, p, "Copy path", Btn::Text, 104.0, 34.0).clicked() {
                 asked = Asked::CopyPath(app.id);
             }
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("Close").color(p.text_dim))
-                        .fill(p.card)
-                        .corner_radius(CornerRadius::same(8))
-                        .min_size(vec2(80.0, 34.0)),
-                )
-                .clicked()
-            {
+            if widgets::button(ui, p, "Close", Btn::Text, 80.0, 34.0).clicked() {
                 asked = Asked::Close;
             }
         });
@@ -906,19 +870,7 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
                     ui.label(RichText::new("Mode").color(p.text_dim));
                     for (m, l) in [(ThemeMode::Light, "Light"), (ThemeMode::Dark, "Dark")] {
                         let sel = s.theme == m;
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new(l).color(if sel {
-                                    p.accent_text
-                                } else {
-                                    p.text_dim
-                                }))
-                                .fill(if sel { p.accent_soft } else { p.card })
-                                .corner_radius(CornerRadius::same(8))
-                                .min_size(vec2(72.0, 30.0)),
-                            )
-                            .clicked()
-                        {
+                        if widgets::segment(ui, p, l, sel, 72.0).clicked() {
                             s.theme = m;
                             changed = true;
                         }
@@ -958,19 +910,7 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
                     ui.label(RichText::new("Density").color(p.text_dim));
                     for d in [Density::Compact, Density::Normal, Density::Relaxed] {
                         let sel = s.density == d;
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new(d.label()).color(if sel {
-                                    p.accent_text
-                                } else {
-                                    p.text_dim
-                                }))
-                                .fill(if sel { p.accent_soft } else { p.card })
-                                .corner_radius(CornerRadius::same(8))
-                                .min_size(vec2(64.0, 30.0)),
-                            )
-                            .clicked()
-                        {
+                        if widgets::segment(ui, p, d.label(), sel, 64.0).clicked() {
                             s.density = d;
                             changed = true;
                         }
@@ -983,19 +923,7 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
                     ui.label(RichText::new("View").color(p.text_dim));
                     for (v, l) in [(ViewMode::Cards, "Cards"), (ViewMode::Table, "Table")] {
                         let sel = s.view == v;
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new(l).color(if sel {
-                                    p.accent_text
-                                } else {
-                                    p.text_dim
-                                }))
-                                .fill(if sel { p.accent_soft } else { p.card })
-                                .corner_radius(CornerRadius::same(8))
-                                .min_size(vec2(72.0, 30.0)),
-                            )
-                            .clicked()
-                        {
+                        if widgets::segment(ui, p, l, sel, 72.0).clicked() {
                             s.view = v;
                             changed = true;
                         }
@@ -1109,26 +1037,10 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
     ui.add_space(10.0);
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("Save and close").color(Color32::WHITE))
-                        .fill(p.accent)
-                        .corner_radius(CornerRadius::same(8))
-                        .min_size(vec2(130.0, 34.0)),
-                )
-                .clicked()
-            {
+            if widgets::button(ui, p, "Save and close", Btn::Filled, 130.0, 34.0).clicked() {
                 asked = Asked::Close;
             }
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("Reset").color(p.text_dim))
-                        .fill(p.card)
-                        .corner_radius(CornerRadius::same(8))
-                        .min_size(vec2(110.0, 34.0)),
-                )
-                .clicked()
-            {
+            if widgets::button(ui, p, "Reset", Btn::Text, 110.0, 34.0).clicked() {
                 *s = Settings::default();
                 changed = true;
             }
@@ -1158,7 +1070,11 @@ pub fn nav_pill(ui: &mut Ui, p: &Palette, label: &str, active: bool) -> bool {
     let (r, resp) = ui.allocate_exact_size(
         vec2(
             ui.painter()
-                .layout_no_wrap(label.to_string(), FontId::proportional(12.5), p.text)
+                .layout_no_wrap(
+                    label.to_string(),
+                    FontId::proportional(theme::T_BODY),
+                    p.text,
+                )
                 .size()
                 .x
                 + 26.0,
@@ -1173,11 +1089,12 @@ pub fn nav_pill(ui: &mut Ui, p: &Palette, label: &str, active: bool) -> bool {
     } else {
         Color32::TRANSPARENT
     };
-    ui.painter().rect_filled(r, CornerRadius::same(8), bg);
+    ui.painter()
+        .rect_filled(r, CornerRadius::same(theme::R_SM), bg);
     if active {
         ui.painter().rect_stroke(
             r,
-            CornerRadius::same(8),
+            CornerRadius::same(theme::R_SM),
             Stroke::new(1.0, p.accent),
             StrokeKind::Inside,
         );
@@ -1186,7 +1103,7 @@ pub fn nav_pill(ui: &mut Ui, p: &Palette, label: &str, active: bool) -> bool {
         r.center(),
         Align2::CENTER_CENTER,
         label,
-        FontId::proportional(12.5),
+        FontId::proportional(theme::T_BODY),
         if active { p.accent_text } else { p.text_dim },
     );
     if resp.hovered() {
@@ -1231,7 +1148,7 @@ pub fn backups(
             );
             ui.label(
                 RichText::new("Backup file")
-                    .font(FontId::proportional(11.5))
+                    .font(FontId::proportional(theme::T_BODY))
                     .color(p.text_faint),
             );
             ui.add_space(10.0);
@@ -1242,7 +1159,7 @@ pub fn backups(
             );
             ui.label(
                 RichText::new("Total size")
-                    .font(FontId::proportional(11.5))
+                    .font(FontId::proportional(theme::T_BODY))
                     .color(p.text_faint),
             );
         });
@@ -1254,7 +1171,7 @@ pub fn backups(
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 96.0), Sense::hover());
         ui.painter().rect(
             r,
-            CornerRadius::same(10),
+            CornerRadius::same(theme::R_CARD),
             p.card,
             Stroke::new(1.0, p.border),
             StrokeKind::Inside,
@@ -1263,7 +1180,7 @@ pub fn backups(
             r.center(),
             Align2::CENTER_CENTER,
             "No saved backups",
-            FontId::proportional(13.0),
+            FontId::proportional(theme::T_UI),
             p.text_dim,
         );
     } else {
@@ -1278,7 +1195,7 @@ pub fn backups(
                         ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
                     ui.painter().rect(
                         r,
-                        CornerRadius::same(9),
+                        CornerRadius::same(theme::R_CARD),
                         p.card,
                         Stroke::new(1.0, p.border),
                         StrokeKind::Inside,
@@ -1293,7 +1210,7 @@ pub fn backups(
                         ui,
                         name_r,
                         &b.file,
-                        FontId::proportional(12.0),
+                        FontId::proportional(theme::T_BODY),
                         p.text,
                         Align2::LEFT_CENTER,
                     );
@@ -1305,7 +1222,7 @@ pub fn backups(
                         ui,
                         meta_r,
                         &format!("{}  ·  {}", b.modified, human_size(b.size)),
-                        FontId::proportional(10.5),
+                        FontId::proportional(theme::T_LABEL),
                         p.text_faint,
                         Align2::LEFT_CENTER,
                     );
@@ -1355,27 +1272,11 @@ pub fn backups(
     ui.add_space(12.0);
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("Close").color(p.text_dim))
-                        .fill(p.card)
-                        .corner_radius(CornerRadius::same(8))
-                        .min_size(vec2(80.0, 34.0)),
-                )
-                .clicked()
-            {
+            if widgets::button(ui, p, "Close", Btn::Text, 80.0, 34.0).clicked() {
                 act = BackupAct::None;
                 ui.close();
             }
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("Open folder").color(p.text_dim))
-                        .fill(p.card)
-                        .corner_radius(CornerRadius::same(8))
-                        .min_size(vec2(104.0, 34.0)),
-                )
-                .clicked()
-            {
+            if widgets::button(ui, p, "Open folder", Btn::Text, 104.0, 34.0).clicked() {
                 act = BackupAct::RevealFolder;
             }
             if !items.is_empty() {
@@ -1394,15 +1295,9 @@ pub fn backups(
                 } else {
                     p.danger
                 };
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new(label).color(fg))
-                            .fill(fill)
-                            .corner_radius(CornerRadius::same(8))
-                            .min_size(vec2(130.0, 34.0)),
-                    )
-                    .clicked()
-                {
+                let resp =
+                    widgets::button_colored(ui, p, label, fg, fill, Stroke::NONE, 130.0, 34.0);
+                if resp.clicked() {
                     if *confirm_clear {
                         *confirm_clear = false;
                         act = BackupAct::ClearAll;

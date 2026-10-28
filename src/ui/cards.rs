@@ -72,7 +72,7 @@ pub fn card(
             ui,
             name_rect,
             &app.name,
-            theme::bold(15.0),
+            theme::bold(theme::T_TITLE),
             p.text,
             Align2::LEFT_CENTER,
         );
@@ -91,7 +91,7 @@ pub fn card(
             ui,
             pub_rect,
             &pub_text,
-            FontId::proportional(12.0),
+            FontId::proportional(theme::T_BODY),
             p.text_dim,
             Align2::LEFT_CENTER,
         );

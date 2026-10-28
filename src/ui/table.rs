@@ -68,7 +68,7 @@ pub fn header(
     );
 
     let c = Cols::for_width(width);
-    let font = FontId::proportional(11.5);
+    let font = FontId::proportional(theme::T_BODY);
     let color = p.text_faint;
     let _cy = rect.center().y;
 
@@ -209,7 +209,7 @@ pub fn row(
         );
         ui.painter().rect_filled(
             id_r,
-            CornerRadius::same(4),
+            CornerRadius::same(theme::R_XS),
             if p.dark {
                 Color32::from_rgb(26, 32, 43)
             } else {
@@ -231,7 +231,7 @@ pub fn row(
             ui,
             text_r,
             &app.name,
-            theme::bold(13.5),
+            theme::bold(theme::T_UI),
             p.text,
             Align2::LEFT_CENTER,
         );
@@ -243,7 +243,7 @@ pub fn row(
             // Nothing left on disk: the registry entry is a leftover.
             let name_w = ui
                 .painter()
-                .layout_no_wrap(app.name.clone(), theme::bold(13.5), p.text)
+                .layout_no_wrap(app.name.clone(), theme::bold(theme::T_UI), p.text)
                 .size()
                 .x;
             let chip_left = text_r.left() + name_w + 8.0;
@@ -284,28 +284,28 @@ pub fn row(
         ui,
         c.publisher_w,
         &app.publisher,
-        FontId::proportional(12.0),
+        FontId::proportional(theme::T_BODY),
         p.text_dim,
     );
     cell(
         ui,
         c.version_w,
         &app.version,
-        FontId::proportional(12.0),
+        FontId::proportional(theme::T_BODY),
         p.text_dim,
     );
     cell(
         ui,
         c.size_w,
         &human_size(app.size_bytes),
-        FontId::proportional(12.0),
+        FontId::proportional(theme::T_BODY),
         p.text_dim,
     );
     cell(
         ui,
         c.date_w,
         &app.install_date,
-        FontId::proportional(12.0),
+        FontId::proportional(theme::T_BODY),
         p.text_faint,
     );
 
@@ -321,7 +321,7 @@ pub fn row(
         };
         let galley = ui.painter().layout_no_wrap(
             app.source.short().to_string(),
-            FontId::proportional(11.0),
+            FontId::proportional(theme::T_LABEL),
             fg,
         );
         let w = galley.size().x + 12.0;

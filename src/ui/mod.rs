@@ -457,19 +457,19 @@ impl AppSweep {
                             r.center(),
                             egui::Align2::CENTER_CENTER,
                             "A",
-                            FontId::proportional(16.0),
+                            FontId::proportional(theme::T_TITLE),
                             Color32::WHITE,
                         );
                         ui.add_space(2.0);
                         ui.label(
                             RichText::new("AppSweep")
-                                .font(theme::bold(17.0))
+                                .font(theme::bold(theme::T_HEADLINE))
                                 .color(p.text),
                         );
                         ui.add_space(6.0);
                         ui.label(
                             RichText::new("App manager")
-                                .font(FontId::proportional(11.5))
+                                .font(FontId::proportional(theme::T_BODY))
                                 .color(p.text_faint),
                         );
                     }
@@ -503,8 +503,8 @@ impl AppSweep {
                                 Color32::from_rgb(248, 250, 253)
                             })
                             .stroke(Stroke::new(1.0, p.border))
-                            .corner_radius(CornerRadius::same(8))
-                            .inner_margin(Margin::symmetric(9, 5));
+                            .corner_radius(CornerRadius::same(theme::R_PILL))
+                            .inner_margin(Margin::symmetric(12, 5));
                         search_frame.show(ui, |ui| {
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.search)
@@ -588,7 +588,7 @@ impl AppSweep {
                                     ui.add_space(10.0);
                                     ui.label(
                                         RichText::new(&self.status)
-                                            .font(FontId::proportional(11.5))
+                                            .font(FontId::proportional(theme::T_BODY))
                                             .color(p.ok),
                                     );
                                 }
@@ -606,7 +606,7 @@ impl AppSweep {
                             if self.elevated {
                                 ui.label(
                                     RichText::new("Admin")
-                                        .font(FontId::proportional(11.0))
+                                        .font(FontId::proportional(theme::T_LABEL))
                                         .color(p.ok),
                                 );
                             }
@@ -614,7 +614,7 @@ impl AppSweep {
                                 ui.add_space(8.0);
                                 ui.label(
                                     RichText::new(format!("{}", self.warnings.len()))
-                                        .font(FontId::proportional(11.0))
+                                        .font(FontId::proportional(theme::T_LABEL))
                                         .color(p.warn),
                                 )
                                 .on_hover_text(self.warnings.join("\n"));
@@ -622,30 +622,30 @@ impl AppSweep {
                             let visible = self.filtered().len();
                             ui.label(
                                 RichText::new(format!("{}", visible))
-                                    .font(theme::bold(12.5))
+                                    .font(theme::bold(theme::T_BODY))
                                     .color(p.text),
                             );
                             ui.label(
                                 RichText::new("Shown")
-                                    .font(FontId::proportional(11.5))
+                                    .font(FontId::proportional(theme::T_BODY))
                                     .color(p.text_faint),
                             );
                             ui.add_space(10.0);
                             ui.label(
                                 RichText::new(format!("{}", self.apps.len()))
-                                    .font(theme::bold(12.5))
+                                    .font(theme::bold(theme::T_BODY))
                                     .color(p.text),
                             );
                             ui.label(
                                 RichText::new("Total")
-                                    .font(FontId::proportional(11.5))
+                                    .font(FontId::proportional(theme::T_BODY))
                                     .color(p.text_faint),
                             );
                             ui.add_space(10.0);
                             let bytes: u64 = self.apps.iter().map(|a| a.size_bytes).sum();
                             ui.label(
                                 RichText::new(human_size(bytes))
-                                    .font(FontId::proportional(11.5))
+                                    .font(FontId::proportional(theme::T_BODY))
                                     .color(p.text_dim),
                             );
                         },
@@ -670,7 +670,7 @@ impl AppSweep {
                         ui.add_space(10.0);
                         ui.label(
                             RichText::new("Scanning installed apps")
-                                .font(FontId::proportional(14.0))
+                                .font(FontId::proportional(theme::T_UI))
                                 .color(p.text_dim),
                         );
                     } else {
@@ -680,17 +680,11 @@ impl AppSweep {
                             } else {
                                 "Not scanned yet"
                             })
-                            .font(theme::bold(15.0))
+                            .font(theme::bold(theme::T_TITLE))
                             .color(p.text_dim),
                         );
                         ui.add_space(8.0);
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new("Scan now").color(Color32::WHITE))
-                                    .fill(p.accent)
-                                    .corner_radius(CornerRadius::same(8))
-                                    .min_size(vec2(160.0, 36.0)),
-                            )
+                        if widgets::button(ui, &p, "Scan now", widgets::Btn::Filled, 160.0, 36.0)
                             .clicked()
                         {
                             self.start_scan(ui.ctx());
