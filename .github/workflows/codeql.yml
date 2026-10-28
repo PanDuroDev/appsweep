@@ -1,0 +1,35 @@
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly: most advisories are published after the code was written.
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v4
+        with:
+          # src/ is Rust and native/helper.cpp is C++; `none` parses both
+          # without an MSVC build, and this repo generates no source at build
+          # time (build.rs only compiles the helper and the icon).
+          languages: rust, c-cpp
+          build-mode: none
+
+      - uses: github/codeql-action/analyze@v4
