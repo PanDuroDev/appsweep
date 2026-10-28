@@ -44,3 +44,5 @@ AppSweep.exe --plan FILE   run a delete plan (used internally after UAC)
 Note
 ----
 A purge cannot be undone. Check the path in the details sheet before confirming.
+
+UI icons: MingCute (Apache-2.0) - https://www.mingcute.com

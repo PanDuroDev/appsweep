@@ -2,6 +2,7 @@
 
 pub mod cards;
 pub mod dialogs;
+pub mod glyph;
 pub mod table;
 pub mod widgets;
 
@@ -472,20 +473,33 @@ impl AppSweep {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         // Added right to left, so the row reads: search, Scan,
                         // Settings, Backups.
-                        if dialogs::nav_pill(ui, &p, "Backups", self.show_backups) {
+                        if dialogs::nav_pill_icon(
+                            ui,
+                            &p,
+                            glyph::Glyph::Backups,
+                            "Backups",
+                            self.show_backups,
+                        ) {
                             self.show_backups = !self.show_backups;
                             if self.show_backups {
                                 self.backups = crate::actions::list_backups();
                             }
                         }
 
-                        if dialogs::nav_pill(ui, &p, "Settings", self.show_settings) {
+                        if dialogs::nav_pill_icon(
+                            ui,
+                            &p,
+                            glyph::Glyph::Settings,
+                            "Settings",
+                            self.show_settings,
+                        ) {
                             self.show_settings = !self.show_settings;
                         }
 
                         if self.scanning {
                             ui.add(egui::Spinner::new().size(14.0));
-                        } else if dialogs::nav_pill(ui, &p, "Scan", false) {
+                        } else if dialogs::nav_pill_icon(ui, &p, glyph::Glyph::Scan, "Scan", false)
+                        {
                             self.start_scan(ctx);
                         }
 
@@ -500,6 +514,7 @@ impl AppSweep {
                             .corner_radius(CornerRadius::same(theme::R_PILL))
                             .inner_margin(Margin::symmetric(14, 0));
                         let mut focused = false;
+                        let mut magnifier: Option<egui::Rect> = None;
                         let search = search_frame.show(ui, |ui| {
                             // Left to right inside the pill, whatever the bar does:
                             // the field first, then the clear button at the edge.
@@ -507,10 +522,16 @@ impl AppSweep {
                             // stretch the pill across the whole header.
                             let clear_w = if self.search.is_empty() { 0.0 } else { 26.0 };
                             ui.allocate_ui_with_layout(
-                                vec2(220.0 + clear_w, theme::CONTROL_H),
+                                vec2(244.0 + clear_w, theme::CONTROL_H),
                                 Layout::left_to_right(Align::Center),
                                 |ui| {
                                     ui.spacing_mut().interact_size.y = theme::CONTROL_H;
+                                    let (ir, _) = ui.allocate_exact_size(
+                                        vec2(16.0, 16.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    magnifier = Some(ir);
+                                    ui.add_space(8.0);
                                     let edit = ui.add_sized(
                                         vec2(220.0, theme::CONTROL_H),
                                         egui::TextEdit::singleline(&mut self.search)
@@ -524,16 +545,16 @@ impl AppSweep {
                                     );
                                     focused = edit.has_focus();
                                     if !self.search.is_empty() {
-                                        let clear = ui.add(
-                                            egui::Button::new(
-                                                RichText::new("\u{00d7}")
-                                                    .size(theme::T_UI)
-                                                    .color(p.text_dim),
-                                            )
-                                            .frame(false)
-                                            .min_size(vec2(18.0, 18.0)),
+                                        let (xr, clear) = ui.allocate_exact_size(
+                                            vec2(18.0, 18.0),
+                                            egui::Sense::click(),
                                         );
-                                        if clear.clicked() {
+                                        if clear.hovered() {
+                                            ui.ctx()
+                                                .set_cursor_icon(egui::CursorIcon::PointingHand);
+                                        }
+                                        glyph::paint(ui, xr, glyph::Glyph::Close, p.text_dim);
+                                        if clear.on_hover_text("Clear").clicked() {
                                             self.search.clear();
                                             edit.request_focus();
                                         }
@@ -549,6 +570,14 @@ impl AppSweep {
                                 CornerRadius::same(theme::R_PILL),
                                 Stroke::new(1.6, p.accent),
                                 egui::StrokeKind::Inside,
+                            );
+                        }
+                        if let Some(r) = magnifier {
+                            glyph::paint(
+                                ui,
+                                r,
+                                glyph::Glyph::Search,
+                                if focused { p.accent } else { p.text_faint },
                             );
                         }
                     });
@@ -590,11 +619,23 @@ impl AppSweep {
                         vec2((total_w - 460.0).max(120.0), theme::CONTROL_H),
                         Layout::left_to_right(Align::Center),
                         |ui| {
-                            if dialogs::nav_pill(ui, &p, "Cards", self.view == ViewMode::Cards) {
+                            if dialogs::nav_pill_icon(
+                                ui,
+                                &p,
+                                glyph::Glyph::Cards,
+                                "Cards",
+                                self.view == ViewMode::Cards,
+                            ) {
                                 self.view = ViewMode::Cards;
                                 self.settings.view = ViewMode::Cards;
                             }
-                            if dialogs::nav_pill(ui, &p, "Table", self.view == ViewMode::Table) {
+                            if dialogs::nav_pill_icon(
+                                ui,
+                                &p,
+                                glyph::Glyph::Table,
+                                "Table",
+                                self.view == ViewMode::Table,
+                            ) {
                                 self.view = ViewMode::Table;
                                 self.settings.view = ViewMode::Table;
                             }

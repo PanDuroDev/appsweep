@@ -1,5 +1,6 @@
 //! Modal dialogs: confirmation flow, live job progress, details and settings.
 
+use super::glyph::Glyph;
 use super::widgets::{self, bidi_line, text_fit, Btn};
 use crate::actions::{Flow, Job, StepStatus};
 use crate::model::{human_size, AppEntry, Source};
@@ -1071,6 +1072,27 @@ pub fn show_modal<R>(
 
 /// Small utility used by the header: a pill button with hover tint.
 pub fn nav_pill(ui: &mut Ui, p: &Palette, label: &str, active: bool) -> bool {
+    nav_pill_inner(ui, p, None, label, active)
+}
+
+/// The same control with a glyph before the label, for the buttons where the
+/// word alone does not say what happens.
+pub fn nav_pill_icon(ui: &mut Ui, p: &Palette, glyph: Glyph, label: &str, active: bool) -> bool {
+    nav_pill_inner(ui, p, Some(glyph), label, active)
+}
+
+fn nav_pill_inner(
+    ui: &mut Ui,
+    p: &Palette,
+    glyph: Option<Glyph>,
+    label: &str,
+    active: bool,
+) -> bool {
+    let icon_w = if glyph.is_some() {
+        theme::T_BODY + 2.0 + 6.0
+    } else {
+        0.0
+    };
     let (r, resp) = ui.allocate_exact_size(
         vec2(
             ui.painter()
@@ -1081,7 +1103,8 @@ pub fn nav_pill(ui: &mut Ui, p: &Palette, label: &str, active: bool) -> bool {
                 )
                 .size()
                 .x
-                + 26.0,
+                + 26.0
+                + icon_w,
             theme::CONTROL_H,
         ),
         Sense::click(),
@@ -1103,13 +1126,34 @@ pub fn nav_pill(ui: &mut Ui, p: &Palette, label: &str, active: bool) -> bool {
             StrokeKind::Inside,
         );
     }
-    ui.painter().text(
-        r.center(),
-        Align2::CENTER_CENTER,
-        label,
-        FontId::proportional(theme::T_BODY),
-        if active { p.accent_text } else { p.text_dim },
-    );
+    let fg = if active { p.accent_text } else { p.text_dim };
+    match glyph {
+        Some(g) => {
+            let size = theme::T_BODY + 2.0;
+            let galley = ui.painter().layout_no_wrap(
+                label.to_string(),
+                FontId::proportional(theme::T_BODY),
+                fg,
+            );
+            let total = size + 6.0 + galley.size().x;
+            let left = r.center().x - total * 0.5;
+            crate::ui::glyph::paint_at(ui, pos2(left + size * 0.5, r.center().y), size, g, fg);
+            ui.painter().galley(
+                pos2(left + size + 6.0, r.center().y - galley.size().y * 0.5),
+                galley,
+                fg,
+            );
+        }
+        None => {
+            ui.painter().text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                label,
+                FontId::proportional(theme::T_BODY),
+                fg,
+            );
+        }
+    }
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }

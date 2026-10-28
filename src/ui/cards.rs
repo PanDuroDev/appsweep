@@ -200,11 +200,12 @@ pub fn card(
 
     // Folder button on the far left.
     let folder = Rect::from_min_size(pos2(x, btn_y), vec2(btn_h, btn_h));
-    let folder_resp = widgets::pill(
+    let folder_resp = widgets::icon_pill(
         ui,
         ("reveal", app.id),
         folder,
-        "⌸",
+        crate::ui::glyph::Glyph::Folder,
+        "",
         p.text_dim,
         if p.dark {
             egui::Color32::from_rgb(42, 42, 42)
@@ -231,10 +232,11 @@ pub fn card(
             egui::Color32::from_rgba_unmultiplied(240, 100, 112, 60),
         ),
     };
-    if widgets::pill(
+    if widgets::icon_pill(
         ui,
         ("purge", app.id),
         purge_rect,
+        crate::ui::glyph::Glyph::Purge,
         "Purge",
         purge_fg,
         purge_bg,
@@ -258,10 +260,11 @@ pub fn card(
             egui::Color32::from_rgba_unmultiplied(p.accent.r(), p.accent.g(), p.accent.b(), 70),
         ),
     };
-    let uninstalled = widgets::pill(
+    let uninstalled = widgets::icon_pill(
         ui,
         ("uninstall", app.id),
         un_rect,
+        crate::ui::glyph::Glyph::Uninstall,
         "Uninstall",
         un_fg,
         un_bg,

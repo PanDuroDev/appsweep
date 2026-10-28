@@ -257,6 +257,44 @@ pub fn chip(ui: &mut Ui, text: &str, fg: Color32, bg: Color32) {
         .galley(rect.center() - galley.size() * 0.5, galley, fg);
 }
 
+/// A pill with a glyph in front of its label, centred as one unit.
+#[allow(clippy::too_many_arguments)]
+pub fn icon_pill(
+    ui: &mut Ui,
+    salt: impl std::hash::Hash + std::fmt::Debug,
+    rect: Rect,
+    glyph: super::glyph::Glyph,
+    label: &str,
+    fg: Color32,
+    bg: Color32,
+    bg_hover: Color32,
+    font_size: f32,
+) -> Response {
+    let resp = pill(ui, salt, rect, "", fg, bg, bg_hover, font_size);
+    let icon = font_size + 2.0;
+    let galley =
+        ui.painter()
+            .layout_no_wrap(label.to_string(), FontId::proportional(font_size), fg);
+    let gap = if label.is_empty() { 0.0 } else { 6.0 };
+    let total = icon + gap + galley.size().x;
+    let left = rect.center().x - total * 0.5;
+    super::glyph::paint_at(
+        ui,
+        pos2(left + icon * 0.5, rect.center().y),
+        icon,
+        glyph,
+        fg,
+    );
+    if !label.is_empty() {
+        ui.painter().galley(
+            pos2(left + icon + gap, rect.center().y - galley.size().y * 0.5),
+            galley,
+            fg,
+        );
+    }
+    resp
+}
+
 /// Draw a chip whose left edge is at `left`, returns the rect it used.
 #[allow(clippy::too_many_arguments)]
 pub fn chip_left(

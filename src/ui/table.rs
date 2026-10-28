@@ -371,11 +371,12 @@ pub fn row(
         let mut bx = r.left() + 8.0;
 
         let folder = Rect::from_min_size(pos2(bx, by), vec2(bh, bh));
-        if widgets::pill(
+        if widgets::icon_pill(
             ui,
             ("trow-reveal", app.id),
             folder,
-            "⌸",
+            crate::ui::glyph::Glyph::Folder,
+            "",
             p.text_dim,
             p.card,
             p.card_hover,
@@ -390,10 +391,11 @@ pub fn row(
 
         let blocked = app.blocked_reason();
         let un_w = 54.0;
-        if widgets::pill(
+        if widgets::icon_pill(
             ui,
             ("trow-un", app.id),
             Rect::from_min_size(pos2(bx, by), vec2(un_w, bh)),
+            crate::ui::glyph::Glyph::Uninstall,
             "Uninstall",
             if blocked.is_some() {
                 p.text_faint
@@ -420,10 +422,11 @@ pub fn row(
         bx += un_w + 5.0;
 
         let pu_w = 66.0;
-        if widgets::pill(
+        if widgets::icon_pill(
             ui,
             ("trow-pu", app.id),
             Rect::from_min_size(pos2(bx, by), vec2(pu_w, bh)),
+            crate::ui::glyph::Glyph::Purge,
             "Purge",
             if blocked.is_some() {
                 p.text_faint
