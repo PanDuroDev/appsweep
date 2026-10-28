@@ -46,7 +46,7 @@ fn main() {
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 a.name,
                 a.publisher,
-                a.source.short_ar(),
+                a.source.short(),
                 a.install_dir
                     .as_ref()
                     .map(|p| p.to_string_lossy().to_string())

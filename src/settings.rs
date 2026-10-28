@@ -35,11 +35,11 @@ impl Density {
             Density::Relaxed => 14.0,
         }
     }
-    pub fn label_ar(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
-            Density::Compact => "مضغوط",
-            Density::Normal => "عادي",
-            Density::Relaxed => "واسع",
+            Density::Compact => "Compact",
+            Density::Normal => "Normal",
+            Density::Relaxed => "Relaxed",
         }
     }
 }
@@ -54,13 +54,13 @@ pub enum SortKey {
 }
 
 impl SortKey {
-    pub fn label_ar(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
-            SortKey::Name => "الاسم",
-            SortKey::Publisher => "الناشر",
-            SortKey::Size => "الحجم",
-            SortKey::Date => "تاريخ التثبيت",
-            SortKey::Source => "المصدر",
+            SortKey::Name => "Name",
+            SortKey::Publisher => "Publisher",
+            SortKey::Size => "Size",
+            SortKey::Date => "Install date",
+            SortKey::Source => "Source",
         }
     }
 }
@@ -96,14 +96,14 @@ impl Accent {
         }
     }
 
-    pub fn label_ar(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
-            Accent::Blue => "أزرق",
-            Accent::Teal => "فيروزي",
-            Accent::Violet => "بنفسجي",
-            Accent::Amber => "عنبري",
-            Accent::Rose => "وردي",
-            Accent::Green => "أخضر",
+            Accent::Blue => "Blue",
+            Accent::Teal => "Teal",
+            Accent::Violet => "Violet",
+            Accent::Amber => "Amber",
+            Accent::Rose => "Rose",
+            Accent::Green => "Green",
         }
     }
 }
@@ -260,12 +260,12 @@ mod tests {
         assert!(Density::Normal.row_height() < Density::Relaxed.row_height());
         assert!(Density::Compact.spacing() < Density::Relaxed.spacing());
         for d in [Density::Compact, Density::Normal, Density::Relaxed] {
-            assert!(!d.label_ar().is_empty());
+            assert!(!d.label().is_empty());
         }
         let mut seen = std::collections::HashSet::new();
         for a in Accent::ALL {
             assert!(seen.insert(a.rgb()), "duplicate accent colour");
-            assert!(!a.label_ar().is_empty());
+            assert!(!a.label().is_empty());
         }
         assert_eq!(seen.len(), Accent::ALL.len());
     }

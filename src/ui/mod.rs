@@ -291,7 +291,7 @@ impl AppSweep {
             None => return,
         };
         if let Some(reason) = blocked {
-            let msg = format!("لا يمكن حذف {} — {}", name, reason);
+            let msg = format!("Cannot delete {} — {}", name, reason);
             self.set_status(msg);
             return;
         }
@@ -336,10 +336,10 @@ impl AppSweep {
                             let s = p.to_string_lossy().to_string();
                             let select = p.is_file();
                             if crate::native::open_in_explorer(&s, select) != 0 {
-                                self.set_status("تعذر فتح مدير الملفات");
+                                self.set_status("Could not open File Explorer");
                             }
                         }
-                        None => self.set_status("لا يوجد مسار معروف لهذا التطبيق"),
+                        None => self.set_status("No known path for this app"),
                     }
                 }
             }
@@ -362,7 +362,7 @@ impl AppSweep {
                         });
                     if let Some(t) = text {
                         ctx.copy_text(t);
-                        self.set_status("تم نسخ المسار");
+                        self.set_status("Path copied");
                     }
                 }
             }
@@ -378,7 +378,7 @@ impl AppSweep {
                 if self.selected == Some(id) {
                     self.selected = None;
                 }
-                self.set_status("أُخفي التطبيق من القائمة");
+                self.set_status("App hidden from the list");
             }
             Act::Run(id) => {
                 if let Some(app) = self.find(id) {
@@ -387,7 +387,7 @@ impl AppSweep {
                     } else if let Some(dir) = &app.install_dir {
                         crate::native::shell_open(&dir.to_string_lossy());
                     } else {
-                        self.set_status("لا يوجد ملف تشغيل");
+                        self.set_status("No executable found");
                     }
                 }
             }
@@ -415,9 +415,9 @@ impl AppSweep {
                             true,
                         );
                         crate::native::run_shell("regedit.exe", "", None, false);
-                        self.set_status("تم فتح السجل");
+                        self.set_status("Registry opened");
                     } else {
-                        self.set_status("لا يوجد مفتاح سجل لهذا التطبيق");
+                        self.set_status("This app has no registry key");
                     }
                 }
             }
@@ -431,7 +431,7 @@ impl AppSweep {
                         .map(|c| if c.is_ascii_alphanumeric() { c } else { '+' })
                         .collect();
                     crate::native::shell_open(&format!("ms-windows-store://search/?query={}", q));
-                    self.set_status("تم فتح المتجر");
+                    self.set_status("Store opened");
                 }
             }
         }
@@ -468,7 +468,7 @@ impl AppSweep {
                         );
                         ui.add_space(6.0);
                         ui.label(
-                            RichText::new("مدير التطبيقات")
+                            RichText::new("App manager")
                                 .font(FontId::proportional(11.5))
                                 .color(p.text_faint),
                         );
@@ -488,7 +488,7 @@ impl AppSweep {
                         search_frame.show(ui, |ui| {
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.search)
-                                    .hint_text("بحث أو رقم المعرّف")
+                                    .hint_text("Search or ID number")
                                     .desired_width(190.0)
                                     .frame(egui::Frame::NONE)
                                     .text_color(p.text),
@@ -497,15 +497,15 @@ impl AppSweep {
 
                         if self.scanning {
                             ui.add(egui::Spinner::new().size(14.0));
-                        } else if dialogs::nav_pill(ui, &p, "فحص", false) {
+                        } else if dialogs::nav_pill(ui, &p, "Scan", false) {
                             self.start_scan(ctx);
                         }
 
-                        if dialogs::nav_pill(ui, &p, "الإعدادات", self.show_settings) {
+                        if dialogs::nav_pill(ui, &p, "Settings", self.show_settings) {
                             self.show_settings = !self.show_settings;
                         }
 
-                        if dialogs::nav_pill(ui, &p, "النسخ", self.show_backups) {
+                        if dialogs::nav_pill(ui, &p, "Backups", self.show_backups) {
                             self.show_backups = !self.show_backups;
                             if self.show_backups {
                                 self.backups = crate::actions::list_backups();
@@ -527,7 +527,7 @@ impl AppSweep {
                             Filter::Favorites,
                             Filter::Remnants,
                         ] {
-                            if dialogs::nav_pill(ui, &p, f.label_ar(), self.filter == f) {
+                            if dialogs::nav_pill(ui, &p, f.label(), self.filter == f) {
                                 self.filter = f;
                             }
                         }
@@ -552,20 +552,20 @@ impl AppSweep {
                         vec2((total_w - 460.0).max(120.0), 26.0),
                         Layout::left_to_right(Align::Center),
                         |ui| {
-                            if dialogs::nav_pill(ui, &p, "كروت", self.view == ViewMode::Cards) {
+                            if dialogs::nav_pill(ui, &p, "Cards", self.view == ViewMode::Cards) {
                                 self.view = ViewMode::Cards;
                                 self.settings.view = ViewMode::Cards;
                             }
-                            if dialogs::nav_pill(ui, &p, "جدول", self.view == ViewMode::Table) {
+                            if dialogs::nav_pill(ui, &p, "Table", self.view == ViewMode::Table) {
                                 self.view = ViewMode::Table;
                                 self.settings.view = ViewMode::Table;
                             }
                             ui.add_space(8.0);
-                            if dialogs::nav_pill(ui, &p, "ترتيب", false) {
+                            if dialogs::nav_pill(ui, &p, "Sort", false) {
                                 self.settings.sort_desc = !self.settings.sort_desc;
                             }
                             egui::ComboBox::from_id_salt("sort-bottom")
-                                .selected_text(self.settings.sort.label_ar())
+                                .selected_text(self.settings.sort.label())
                                 .width(110.0)
                                 .show_ui(ui, |ui| {
                                     for k in [
@@ -575,11 +575,7 @@ impl AppSweep {
                                         SortKey::Date,
                                         SortKey::Source,
                                     ] {
-                                        ui.selectable_value(
-                                            &mut self.settings.sort,
-                                            k,
-                                            k.label_ar(),
-                                        );
+                                        ui.selectable_value(&mut self.settings.sort, k, k.label());
                                     }
                                 });
                             if !self.status.is_empty() {
@@ -606,7 +602,7 @@ impl AppSweep {
                         |ui| {
                             if self.elevated {
                                 ui.label(
-                                    RichText::new("مسؤول")
+                                    RichText::new("Admin")
                                         .font(FontId::proportional(11.0))
                                         .color(p.ok),
                                 );
@@ -618,7 +614,7 @@ impl AppSweep {
                                     .color(p.text),
                             );
                             ui.label(
-                                RichText::new("معروض")
+                                RichText::new("Shown")
                                     .font(FontId::proportional(11.5))
                                     .color(p.text_faint),
                             );
@@ -629,7 +625,7 @@ impl AppSweep {
                                     .color(p.text),
                             );
                             ui.label(
-                                RichText::new("إجمالي")
+                                RichText::new("Total")
                                     .font(FontId::proportional(11.5))
                                     .color(p.text_faint),
                             );
@@ -670,16 +666,16 @@ impl AppSweep {
                         ui.add(egui::Spinner::new().size(28.0));
                         ui.add_space(10.0);
                         ui.label(
-                            RichText::new("جارٍ فحص التطبيقات المثبتة")
+                            RichText::new("Scanning installed apps")
                                 .font(FontId::proportional(14.0))
                                 .color(p.text_dim),
                         );
                     } else {
                         ui.label(
                             RichText::new(if self.scanned_once {
-                                "لا توجد نتائج مطابقة"
+                                "No matching results"
                             } else {
-                                "لم يتم الفحص بعد"
+                                "Not scanned yet"
                             })
                             .font(theme::bold(15.0))
                             .color(p.text_dim),
@@ -687,12 +683,10 @@ impl AppSweep {
                         ui.add_space(8.0);
                         if ui
                             .add(
-                                egui::Button::new(
-                                    RichText::new("فحص النظام الآن").color(Color32::WHITE),
-                                )
-                                .fill(p.accent)
-                                .corner_radius(CornerRadius::same(8))
-                                .min_size(vec2(160.0, 36.0)),
+                                egui::Button::new(RichText::new("Scan now").color(Color32::WHITE))
+                                    .fill(p.accent)
+                                    .corner_radius(CornerRadius::same(8))
+                                    .min_size(vec2(160.0, 36.0)),
                             )
                             .clicked()
                         {
@@ -735,7 +729,7 @@ impl AppSweep {
                 }
                 ViewMode::Table => {
                     let width = ui.available_width();
-                    let sort_label = self.settings.sort.label_ar();
+                    let sort_label = self.settings.sort.label();
                     let hh = 30.0;
                     sort_click = table::header(ui, &c, width, hh, sort_label);
                     let rh = self.settings.density.row_height();
@@ -792,8 +786,10 @@ impl AppSweep {
                         .cloned();
                     if let Some(e) = entry {
                         match crate::actions::delete_backup(&e) {
-                            Ok(()) => self.set_status("تم حذف النسخة"),
-                            Err(err) => self.set_status(format!("فشل حذف النسخة: {}", err)),
+                            Ok(()) => self.set_status("Backup deleted"),
+                            Err(err) => {
+                                self.set_status(format!("Could not delete the backup: {}", err))
+                            }
                         }
                     }
                     self.backups = crate::actions::list_backups();
@@ -801,9 +797,11 @@ impl AppSweep {
                 dialogs::BackupAct::ClearAll => {
                     match crate::actions::clear_backups() {
                         Ok(n) => {
-                            self.set_status(format!("تم حذف {} نسخة", n));
+                            self.set_status(format!("Deleted {} backups", n));
                         }
-                        Err(err) => self.set_status(format!("فشل حذف النسخ: {}", err)),
+                        Err(err) => {
+                            self.set_status(format!("Could not delete the backups: {}", err))
+                        }
                     }
                     self.backups = crate::actions::list_backups();
                 }
@@ -816,10 +814,10 @@ impl AppSweep {
                     let (launch, code) =
                         crate::native::run_cmd(&format!("reg import \"{}\"", path), true);
                     if launch == 0 && code == 0 {
-                        self.set_status("تم استيراد النسخة إلى السجل");
+                        self.set_status("Backup imported into the registry");
                     } else {
                         let bad = if launch != 0 { launch } else { code as i32 };
-                        self.set_status(format!("فشل الاستيراد، الرمز {}", bad));
+                        self.set_status(format!("Import failed, code {}", bad));
                     }
                 }
                 dialogs::BackupAct::None => {}
@@ -899,7 +897,7 @@ impl AppSweep {
                     self.job = None;
                     self.cache.clear();
                     if success {
-                        self.set_status("تمت العملية بنجاح");
+                        self.set_status("Operation completed successfully");
                     }
                     self.start_scan(ctx);
                 }
@@ -994,7 +992,7 @@ impl eframe::App for AppSweep {
             self.scanned_once = true;
             self.scan_at = Some(Instant::now());
             self.cache.clear();
-            self.set_status("انتهى الفحص");
+            self.set_status("Scan finished");
             self.start_enrich(ctx);
             self.debug_open();
         }

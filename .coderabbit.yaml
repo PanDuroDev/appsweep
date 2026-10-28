@@ -1,6 +1,6 @@
-# CodeRabbit reviews every pull request, including Dependabot's, in Arabic.
+# CodeRabbit reviews every pull request, including Dependabot's, in English.
 # It is advisory: the merge gate is the `build` job in ci.yml.
-language: ar
+language: en
 early_access: false
 tone_instructions: "Critical, no flattery. This app deletes files and registry keys: a missing guard is data loss."
 reviews:
@@ -45,7 +45,7 @@ reviews:
     # CI already runs clippy with -D warnings; keep it in the review for context.
     clippy:
       enabled: true
-    # README is Arabic and comments are short: both tools only add noise here.
+    # Docs are short and comments are terse: both tools only add noise here.
     markdownlint:
       enabled: false
     languagetool:

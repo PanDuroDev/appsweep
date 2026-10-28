@@ -25,6 +25,9 @@ human-directed or automatic. Each agent has its own file in `.github/ai/`.
    -- -D warnings`, `cargo test --release --locked`,
    `cargo run --release --locked -- --selftest`.
 
+The product is English: every UI string, doc, commit message, issue and PR is
+written in English, even when the user writes in another language.
+
 ## Who edits, who reviews
 
 | Agent | Edits code | Reviews | Where it acts |

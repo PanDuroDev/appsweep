@@ -541,20 +541,20 @@ fn scan_uwp(apps: &mut Vec<AppEntry>, next_id: &mut u64, warnings: &mut Vec<Stri
 
     let sid = crate::native::current_user_sid();
     if sid.is_empty() {
-        warnings.push("تعذر قراءة معرف المستخدم".into());
+        warnings.push("Could not read the user ID".into());
         return;
     }
     let pm = match PackageManager::new() {
         Ok(p) => p,
         Err(e) => {
-            warnings.push(format!("تعذر الوصول إلى مدير الحزم: {e}"));
+            warnings.push(format!("Could not reach the package manager: {e}"));
             return;
         }
     };
     let list = match pm.FindPackagesByUserSecurityId(&HSTRING::from(sid.as_str())) {
         Ok(l) => l,
         Err(e) => {
-            warnings.push(format!("تعذر تعداد تطبيقات المتجر: {e}"));
+            warnings.push(format!("Could not enumerate Store apps: {e}"));
             return;
         }
     };
@@ -580,7 +580,7 @@ fn scan_uwp(apps: &mut Vec<AppEntry>, next_id: &mut u64, warnings: &mut Vec<Stri
         // Keep it listed (the user asked for every app) but label it clearly.
         let unnamed = looks_like_guid(name.trim());
         if unnamed {
-            name = "حزمة نظام بلا اسم".to_string();
+            name = "Unnamed system package".to_string();
         }
         let publisher = pkg
             .PublisherDisplayName()

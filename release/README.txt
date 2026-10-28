@@ -1,45 +1,46 @@
 ﻿AppSweep 1.0.0 - Windows app manager and deep uninstaller
 ==========================================================
 
-التشغيل
--------
-شغّل AppSweep.exe مباشرة. لا يحتاج تثبيت.
-للحذف النهائي الكامل سيطلب النظام صلاحيات المسؤول (UAC).
+Run
+---
+Run AppSweep.exe directly. No installation is needed.
+A full purge asks for administrator rights (UAC).
 
-المزايا
--------
-- يسرد كل التطبيقات المثبتة: برامج سطح المكتب، تطبيقات المتجر، والاختصارات.
-- يشمل تطبيقات النظام ومكونات التشغيل المشتركة (يمكن إخفاؤها من الإعدادات).
-- عرض كروت أو جدول، مع أيقونة كل تطبيق.
-- بحث فوري وتصفية حسب النوع، والمفضلة، و"بقايا" (إدخالات بلا ملفات).
-- لكل تطبيق رقم معرّف ثابت يظهر على الكرت وفي الجدول وفي نافذة التفاصيل.
-  يمكن البحث بالرقم مباشرة (مثال: 449 أو #449).
-- ثلاثة أزرار لكل تطبيق:
-  * إزالة   : الأداة الرسمية، ثم الصامتة، ثم MSI، ثم مدير الحزم، مع تجربة الطرق الأخرى تلقائياً.
-  * الملفات: حذف ملفات التطبيق فقط.
-  * حذف كامل: حذف الملفات والسجل والاختصارات والخدمات والمهام المجدولة والبقايا،
-              مع نسخة احتياطية ونقطة استعادة.
-- نافذة تفاصيل كاملة: الناشر، الإصدار، الحجم، تاريخ التثبيت، المعمارية الحقيقية
-  (تُقرأ من ملف التشغيل)، المسارات، مفتاح السجل، الآثار المكتشفة، وملاحظات خاصة بك.
-- مدير النسخ المحفوظة: استعراض نسخ السجل الاحتياطية، استعادتها، أو حذفها.
-- تأكيد نهائي بكتابة رقم المعرّف (وليس الاسم) لأن بعض الأسماء تحتوي رموزاً
-  لا يمكن كتابتها. الزر يبقى معطلاً حتى يتطابق الرقم.
-- حماية مدمجة: لا يمكن حذف مجلدات النظام أو مجلدات الجذر، والأزرار تظهر
-  باهتة على هذه التطبيقات.
+Features
+--------
+- Lists every installed app: desktop programs, Store apps and shortcuts.
+- Includes system apps and shared runtimes (hide them in Settings).
+- Card or table view, with the icon of each app.
+- Instant search and filters by type, favorites, and "Remnant" (entries whose files are gone).
+- Every app has a stable numeric id shown on the card, in the table and in the details sheet.
+  Search by the number directly (example: 449 or #449).
+- Three buttons per app:
+  * Uninstall: the official uninstaller, then silent, then MSI, then the package
+               manager, trying the other methods automatically.
+  * Files    : delete only the app's files.
+  * Purge    : delete files, registry, shortcuts, services, scheduled tasks and
+               leftovers, with a registry backup and a restore point.
+- Full details sheet: publisher, version, size, install date, real architecture
+  (read from the executable header), paths, registry key, detected traces and your own notes.
+- Backup manager: browse the saved registry backups, restore them or delete them.
+- Final confirmation requires the numeric id (not the name), because some names
+  contain glyphs that cannot be typed. The button stays disabled until it matches.
+- Built-in protection: system and drive-root folders can never be deleted, and the
+  buttons stay dimmed for those apps.
 
-الإعدادات
----------
-تُحفظ في: %APPDATA%\AppSweep\settings.json
-النسخ الاحتياطية للسجل: %APPDATA%\AppSweep\backups
+Settings
+--------
+Saved in: %APPDATA%\AppSweep\settings.json
+Registry backups: %APPDATA%\AppSweep\backups
 
-خيارات سطر الأوامر
--------------------
-AppSweep.exe --version     إظهار الإصدار
-AppSweep.exe --selftest    اختبار ذاتي آمن للحذف (مجلد مؤقت فقط)
-AppSweep.exe --dump        طباعة قائمة التطبيقات المكتشفة
-AppSweep.exe --tasks PATH  عرض المهام المجدولة المرتبطة بمسار
-AppSweep.exe --plan FILE   تنفيذ خطة حذف (يستخدم داخلياً بعد UAC)
+Command line
+------------
+AppSweep.exe --version     show the version
+AppSweep.exe --selftest    safe self-test of the delete engine (temp folder only)
+AppSweep.exe --dump        print the detected app list
+AppSweep.exe --tasks PATH  show the scheduled tasks tied to a path
+AppSweep.exe --plan FILE   run a delete plan (used internally after UAC)
 
-ملاحظة
-------
-الحذف النهائي لا يمكن التراجع عنه. راجع المسار في نافذة التفاصيل قبل التأكيد.
+Note
+----
+A purge cannot be undone. Check the path in the details sheet before confirming.

@@ -2,8 +2,8 @@
 
 **Role:** review only. It never edits this repository.
 
-**Acts on:** every pull request, automatically, in Arabic (`.coderabbit.yaml`
-sets `language: ar`). Re-reviews on each push.
+**Acts on:** every pull request, automatically, in English (`.coderabbit.yaml`
+sets `language: en`). Re-reviews on each push.
 
 **Owns:** `.coderabbit.yaml`. Tune the rules there; nothing else configures it.
 

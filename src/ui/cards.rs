@@ -45,7 +45,7 @@ pub fn card(
             ui.auto_id_with(("cardicon", app.id)),
             Sense::click(),
         )
-        .on_hover_text("عرض التفاصيل")
+        .on_hover_text("Show details")
         .clicked()
     {
         act = Some(Act::Details(app.id));
@@ -57,7 +57,7 @@ pub fn card(
         vec2(24.0, 24.0),
     );
     if widgets::star(ui, ("star", app.id), star_rect, app.favorite, p)
-        .on_hover_text("مفضلة")
+        .on_hover_text("Favorite")
         .clicked()
     {
         act = Some(Act::Favorite(app.id));
@@ -81,7 +81,7 @@ pub fn card(
         );
     }
     let pub_text = if app.publisher.is_empty() {
-        app.source.label_ar().to_string()
+        app.source.label().to_string()
     } else {
         app.publisher.clone()
     };
@@ -170,7 +170,7 @@ pub fn card(
         ui,
         chip_right,
         chip_y,
-        app.source.short_ar(),
+        app.source.short(),
         src_fg,
         src_bg,
         chip_font,
@@ -182,7 +182,7 @@ pub fn card(
             ui,
             chip_right,
             chip_y,
-            "نظام",
+            "System",
             p.warn,
             p.warn_soft,
             chip_font,
@@ -195,7 +195,7 @@ pub fn card(
             ui,
             chip_right,
             chip_y,
-            "بقايا",
+            "Remnant",
             p.danger,
             p.danger_soft,
             chip_font,
@@ -224,7 +224,7 @@ pub fn card(
         p.card_hover,
         15.0,
     );
-    if folder_resp.on_hover_text("فتح مجلد التطبيق").clicked() {
+    if folder_resp.on_hover_text("Open the app folder").clicked() {
         act = Some(Act::Reveal(app.id));
     }
     x += 36.0;
@@ -235,7 +235,7 @@ pub fn card(
         ui,
         ("files", app.id),
         files_rect,
-        "الملفات",
+        "Files",
         p.text_dim,
         if p.dark {
             egui::Color32::from_rgb(30, 37, 50)
@@ -245,7 +245,7 @@ pub fn card(
         p.card_hover,
         12.0,
     )
-    .on_hover_text("حذف ملفات التطبيق فقط")
+    .on_hover_text("Delete only the app's files")
     .clicked()
     {
         act = Some(Act::Files(app.id));
@@ -268,13 +268,13 @@ pub fn card(
         ui,
         ("purge", app.id),
         purge_rect,
-        "حذف كامل",
+        "Purge",
         purge_fg,
         purge_bg,
         purge_hover,
         12.0,
     )
-    .on_hover_text(blocked.unwrap_or("حذف نهائي مع كل الجذور والبقايا"))
+    .on_hover_text(blocked.unwrap_or("Permanent deletion of every root and leftover"))
     .clicked()
     {
         act = Some(Act::Purge(app.id));
@@ -295,14 +295,14 @@ pub fn card(
         ui,
         ("uninstall", app.id),
         un_rect,
-        "إزالة",
+        "Uninstall",
         un_fg,
         un_bg,
         un_hover,
         12.0,
     );
     if uninstalled
-        .on_hover_text(blocked.unwrap_or("تشغيل أداة الإزالة مع بدائل تلقائية"))
+        .on_hover_text(blocked.unwrap_or("Run the uninstaller with automatic fallbacks"))
         .clicked()
     {
         act = Some(Act::Uninstall(app.id));
@@ -311,37 +311,36 @@ pub fn card(
     // --- right click menu with the secondary actions
     let id = app.id;
     resp.context_menu(|ui| {
-        if ui.button("تشغيل التطبيق").clicked() {
+        if ui.button("Launch app").clicked() {
             act = Some(Act::Run(id));
             ui.close();
         }
-        if ui.button("عرض التفاصيل").clicked() {
+        if ui.button("Show details").clicked() {
             act = Some(Act::Details(id));
             ui.close();
         }
-        if ui.button("فتح مجلد التطبيق").clicked() {
+        if ui.button("Open the app folder").clicked() {
             act = Some(Act::Reveal(id));
             ui.close();
         }
-        if ui.button("خصائص الملف").clicked() {
+        if ui.button("File properties").clicked() {
             act = Some(Act::Props(id));
             ui.close();
         }
-        if ui.button("نسخ المسار").clicked() {
+        if ui.button("Copy path").clicked() {
             act = Some(Act::CopyPath(id));
             ui.close();
         }
-        if app.reg_key.is_some() && ui.button("فتح مفتاح السجل").clicked() {
+        if app.reg_key.is_some() && ui.button("Open registry key").clicked() {
             act = Some(Act::RegKey(id));
             ui.close();
         }
-        if app.source == crate::model::Source::Uwp && ui.button("فتح في المتجر").clicked()
-        {
+        if app.source == crate::model::Source::Uwp && ui.button("Open in Store").clicked() {
             act = Some(Act::OpenStore(id));
             ui.close();
         }
         ui.separator();
-        if ui.button("إخفاء من القائمة").clicked() {
+        if ui.button("Hide from list").clicked() {
             act = Some(Act::Hide(id));
             ui.close();
         }

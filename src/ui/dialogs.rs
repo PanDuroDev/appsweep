@@ -7,7 +7,7 @@ use crate::settings::{Accent, Density, Settings, SortKey, ThemeMode, ViewMode};
 use crate::theme::{self, Palette};
 use egui::{
     pos2, vec2, Align, Align2, Color32, CornerRadius, FontId, Frame, Id, Layout, Margin, Modal,
-    ProgressBar, Rect, RichText, Sense, Stroke, StrokeKind, Ui, Vec2,
+    ProgressBar, Rect, RichText, Sense, Stroke, StrokeKind, Ui,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -21,14 +21,14 @@ pub enum Filter {
 }
 
 impl Filter {
-    pub fn label_ar(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
-            Filter::All => "الكل",
-            Filter::Desktop => "سطح المكتب",
-            Filter::Store => "المتجر",
-            Filter::System => "تطبيقات النظام",
-            Filter::Favorites => "المفضلة",
-            Filter::Remnants => "بقايا",
+            Filter::All => "All",
+            Filter::Desktop => "Desktop",
+            Filter::Store => "Store",
+            Filter::System => "System apps",
+            Filter::Favorites => "Favorites",
+            Filter::Remnants => "Remnant",
         }
     }
 }
@@ -104,7 +104,7 @@ fn field(ui: &mut Ui, p: &Palette, label: &str, value: &str, mono: bool) {
                 if resp.clicked() {
                     ui.ctx().copy_text(value.to_string());
                 }
-                resp.on_hover_text("اضغط للنسخ");
+                resp.on_hover_text("Click to copy");
             }
         });
     });
@@ -155,8 +155,8 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
     ui.set_width(width);
 
     let heading = match st.stage {
-        0 => "اختيار طريقة الحذف",
-        _ => "تأكيد الحذف",
+        0 => "Choose how to delete",
+        _ => "Confirm deletion",
     };
     title(ui, p, heading);
     ui.add_space(6.0);
@@ -210,18 +210,18 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
                     let opts = [
                         (
                             Flow::Uninstall,
-                            "إزالة عبر الأداة الرسمية",
-                            "يشغّل أداة إزالة التثبيت، ثم يجرّب الإزالة الصامتة، ثم MSI، ثم مدير الحزم.",
+                            "Uninstall with the official tool",
+                            "Runs the app's uninstaller, then tries silent removal, then MSI, then the package manager.",
                         ),
                         (
                             Flow::FilesOnly,
-                            "حذف الملفات فقط",
-                            "ينقل مجلد البرنامج إلى سلة المحذوفات ثم يحذفه. لا يمس السجل.",
+                            "Delete files only",
+                            "Moves the program folder to the Recycle Bin, then deletes it. The registry is left alone.",
                         ),
                         (
                             Flow::Purge,
-                            "حذف نهائي بكل الجذور",
-                            "يحذف الملفات وبيانات التطبيق والسجل والاختصارات والخدمات. لا يمكن التراجع.",
+                            "Purge everything",
+                            "Deletes files, app data, registry entries, shortcuts and services. This cannot be undone.",
                         ),
                     ];
                     for (flow, label, desc) in opts {
@@ -273,13 +273,13 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.checkbox(
                     &mut st.auto_cascade,
-                    "تجربة الطرق الأخرى تلقائياً عند فشل طريقة",
+                    "Try the other methods automatically when one fails",
                 );
             });
         });
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.checkbox(&mut st.keep_data, "الاحتفاظ ببيانات المستخدم إن أمكن");
+                ui.checkbox(&mut st.keep_data, "Keep user data when possible");
             });
         });
 
@@ -287,7 +287,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let go =
-                    egui::Button::new(RichText::new("متابعة").font(FontId::proportional(13.5)))
+                    egui::Button::new(RichText::new("Continue").font(FontId::proportional(13.5)))
                         .fill(p.accent)
                         .corner_radius(CornerRadius::same(8))
                         .min_size(vec2(110.0, 34.0));
@@ -296,7 +296,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
                 }
                 if ui
                     .add(
-                        egui::Button::new(RichText::new("إلغاء").color(p.text_dim))
+                        egui::Button::new(RichText::new("Cancel").color(p.text_dim))
                             .fill(p.card)
                             .corner_radius(CornerRadius::same(8))
                             .min_size(vec2(88.0, 34.0)),
@@ -321,21 +321,24 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
         pos2(r.right() - 12.0, r.bottom() - 6.0),
     );
     let warn_text = if danger {
-        "سيتم حذف التطبيق نهائياً مع ملفاته وبياناته وسجله. لا يمكن التراجع."
+        "Permanent: every file, registry entry, shortcut and service is removed."
     } else if st.flow == Flow::FilesOnly {
-        "سيتم حذف مجلد البرنامج فقط، وقد يبقى الإدخال في قائمة البرامج."
+        "Only the program folder is deleted; the list entry may remain."
     } else {
-        "سيتم تشغيل أداة الإزالة الرسمية، ثم تجربة البدائل عند الحاجة."
+        "The official uninstaller will run, then the fallbacks when needed."
     };
     bidi_line(ui, warn_rect, warn_text, FontId::proportional(12.5), accent);
 
     ui.add_space(10.0);
     let steps = [
-        ("تشغيل العمليات", "إغلاق التطبيق إن كان مفتوحاً"),
-        ("نسخة احتياطية", "تصدير مفتاح السجل قبل الحذف"),
-        ("نقطة استعادة", "حماية النظام قبل التعديل"),
-        ("تنفيذ الحذف", "بالطريقة المختارة ثم البدائل"),
-        ("التحقق", "التأكد من اختفاء الملفات"),
+        ("Stop processes", "Close the app if it is running"),
+        ("Backup", "Export the registry key before deleting"),
+        ("Restore point", "Protect the system before the changes"),
+        (
+            "Run the deletion",
+            "With the chosen method, then the fallbacks",
+        ),
+        ("Verify", "Confirm the files are gone"),
     ];
     for (i, (t, d)) in steps.iter().enumerate() {
         ui.horizontal(|ui| {
@@ -365,9 +368,9 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let ack_text = if danger {
-                "أفهم أن هذا الحذف نهائي ولا يمكن التراجع عنه"
+                "I understand this deletion is permanent and cannot be undone"
             } else {
-                "أوافق على المتابعة"
+                "I agree to continue"
             };
             let ack_color = if st.ack { p.text } else { p.text_dim };
             ui.checkbox(&mut st.ack, RichText::new(ack_text).color(ack_color));
@@ -383,7 +386,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.label(
-                    RichText::new("اكتب رقم المعرّف للتأكيد")
+                    RichText::new("Type the ID number to confirm")
                         .font(FontId::proportional(11.5))
                         .color(p.text_dim),
                 );
@@ -409,7 +412,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
                         .corner_radius(CornerRadius::same(6))
                         .min_size(vec2(64.0, 24.0)),
                     )
-                    .on_hover_text("انسخ هذا الرقم")
+                    .on_hover_text("Copy this number")
                     .clicked()
                 {
                     ui.ctx().copy_text(format!("{}", st.app.id));
@@ -424,9 +427,9 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
             let armed = st.ack && typed_ok;
             let go = egui::Button::new(
                 RichText::new(if danger {
-                    "حذف نهائي الآن"
+                    "Delete permanently now"
                 } else {
-                    "بدء الإزالة"
+                    "Start uninstall"
                 })
                 .font(FontId::proportional(13.5))
                 .color(if armed { Color32::WHITE } else { p.text_faint }),
@@ -450,7 +453,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
             }
             if ui
                 .add(
-                    egui::Button::new(RichText::new("رجوع").color(p.text_dim))
+                    egui::Button::new(RichText::new("Back").color(p.text_dim))
                         .fill(p.card)
                         .corner_radius(CornerRadius::same(8))
                         .min_size(vec2(88.0, 36.0)),
@@ -461,7 +464,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
             }
             if ui
                 .add(
-                    egui::Button::new(RichText::new("إلغاء").color(p.text_dim))
+                    egui::Button::new(RichText::new("Cancel").color(p.text_dim))
                         .fill(p.card)
                         .corner_radius(CornerRadius::same(8))
                         .min_size(vec2(88.0, 36.0)),
@@ -482,7 +485,7 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
     let mut asked = Asked::None;
     ui.set_width(620.0);
 
-    title(ui, p, job.flow.title_ar());
+    title(ui, p, job.flow.title());
     ui.add_space(2.0);
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -573,9 +576,9 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
             if job.done {
                 let ok = job.success;
                 let (col, bg, txt) = if ok {
-                    (p.ok, p.ok_soft, "تمت العملية بنجاح")
+                    (p.ok, p.ok_soft, "Operation completed successfully")
                 } else {
-                    (p.warn, p.warn_soft, "انتهت العملية مع ملاحظات")
+                    (p.warn, p.warn_soft, "Operation finished with warnings")
                 };
                 // Banner behind the result so the outcome is unmistakable.
                 egui::Frame::NONE
@@ -587,7 +590,7 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
                     });
                 if ui
                     .add(
-                        egui::Button::new(RichText::new("إغلاق").color(Color32::WHITE))
+                        egui::Button::new(RichText::new("Close").color(Color32::WHITE))
                             .fill(p.accent)
                             .corner_radius(CornerRadius::same(8))
                             .min_size(vec2(96.0, 34.0)),
@@ -598,7 +601,7 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
                 }
                 if ui
                     .add(
-                        egui::Button::new(RichText::new("إعادة الفحص").color(p.text_dim))
+                        egui::Button::new(RichText::new("Rescan").color(p.text_dim))
                             .fill(p.card)
                             .corner_radius(CornerRadius::same(8))
                             .min_size(vec2(110.0, 34.0)),
@@ -609,7 +612,7 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
                 }
             } else {
                 ui.label(
-                    RichText::new("جارٍ التنفيذ، لا تغلق التطبيق")
+                    RichText::new("Running, do not close the app")
                         .font(FontId::proportional(12.0))
                         .color(p.text_dim),
                 );
@@ -641,11 +644,11 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let src = if app.is_remnant() {
-                        "بقايا إزالة غير مكتملة"
+                        "Remnants of an incomplete uninstall"
                     } else if app.is_system {
-                        "تطبيق نظام"
+                        "System app"
                     } else {
-                        app.source.label_ar()
+                        app.source.label()
                     };
                     ui.label(RichText::new(src).font(FontId::proportional(12.0)).color(
                         if app.is_remnant() {
@@ -669,20 +672,20 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            section(ui, p, "معلومات عامة");
-            field(ui, p, "المعرّف", &format!("#{}", app.id), true);
-            field(ui, p, "الناشر", &app.publisher, false);
-            field(ui, p, "الإصدار", &app.version, false);
-            field(ui, p, "الحجم", &human_size(app.size_bytes), false);
-            field(ui, p, "تاريخ التثبيت", &app.install_date, false);
-            field(ui, p, "المعمارية", app.arch.text(), false);
+            section(ui, p, "General");
+            field(ui, p, "ID", &format!("#{}", app.id), true);
+            field(ui, p, "Publisher", &app.publisher, false);
+            field(ui, p, "Version", &app.version, false);
+            field(ui, p, "Size", &human_size(app.size_bytes), false);
+            field(ui, p, "Install date", &app.install_date, false);
+            field(ui, p, "Architecture", app.arch.text(), false);
 
             ui.add_space(4.0);
-            section(ui, p, "الملفات");
+            section(ui, p, "Files");
             field(
                 ui,
                 p,
-                "مجلد التثبيت",
+                "Install folder",
                 &app.install_dir
                     .as_ref()
                     .map(|d| d.to_string_lossy().to_string())
@@ -692,7 +695,7 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
             field(
                 ui,
                 p,
-                "ملف التشغيل",
+                "Executable",
                 &app.launch_exe
                     .as_ref()
                     .map(|d| d.to_string_lossy().to_string())
@@ -701,25 +704,25 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
             );
 
             ui.add_space(4.0);
-            section(ui, p, "الإزالة والمصدر");
+            section(ui, p, "Uninstall and source");
             field(
                 ui,
                 p,
-                "أداة الإزالة",
+                "Uninstaller",
                 app.uninstall_string.as_deref().unwrap_or(""),
                 true,
             );
             if let Some(q) = &app.quiet_uninstall_string {
-                field(ui, p, "الإزالة الصامتة", q, true);
+                field(ui, p, "Silent uninstall", q, true);
             }
             if let Some(pkg) = &app.package_full_name {
-                field(ui, p, "حزمة المتجر", pkg, true);
+                field(ui, p, "Store package", pkg, true);
             }
             if let Some((root, key)) = &app.reg_key {
                 field(
                     ui,
                     p,
-                    "مفتاح السجل",
+                    "Registry key",
                     &format!("{}\\{}", root.label(), key),
                     true,
                 );
@@ -727,7 +730,7 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
             field(
                 ui,
                 p,
-                "عدد الاختصارات",
+                "Shortcuts",
                 &format!("{}", app.shortcuts.len()),
                 false,
             );
@@ -735,28 +738,28 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
                 field(
                     ui,
                     p,
-                    "آثار إضافية",
+                    "Extra traces",
                     &format!("{}", app.traces.len()),
                     false,
                 );
                 for t in app.traces.iter().take(6) {
                     let s = t.to_string_lossy().to_string();
-                    field(ui, p, "أثر", &s, true);
+                    field(ui, p, "Trace", &s, true);
                 }
             }
             if app.source == Source::Uwp {
-                field(ui, p, "النوع", "حزمة تطبيق حديثة", false);
+                field(ui, p, "Type", "Modern app package", false);
             }
 
             // Free-form note the user can keep per app. Saved with the entry.
             ui.add_space(6.0);
-            section(ui, p, "ملاحظات");
+            section(ui, p, "Notes");
             let mut notes = app.notes.clone();
             ui.add(
                 egui::TextEdit::multiline(&mut notes)
                     .desired_width(ui.available_width())
                     .desired_rows(2)
-                    .hint_text("اكتب ملاحظة عن هذا التطبيق")
+                    .hint_text("Write a note about this app")
                     .font(FontId::proportional(12.5)),
             );
             if notes != app.notes {
@@ -771,7 +774,7 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
                 ui.add_space(4.0);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(
-                        RichText::new("بدون صلاحيات مدير")
+                        RichText::new("Without administrator rights")
                             .font(FontId::proportional(11.5))
                             .color(p.warn),
                     );
@@ -786,7 +789,7 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
             let blocked = app.blocked_reason();
             if ui
                 .add(
-                    egui::Button::new(RichText::new("حذف كامل").color(if blocked.is_some() {
+                    egui::Button::new(RichText::new("Purge").color(if blocked.is_some() {
                         p.text_faint
                     } else {
                         p.danger
@@ -799,7 +802,7 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
                     .corner_radius(CornerRadius::same(8))
                     .min_size(vec2(100.0, 34.0)),
                 )
-                .on_hover_text(blocked.unwrap_or("حذف نهائي مع كل الجذور والبقايا"))
+                .on_hover_text(blocked.unwrap_or("Permanent deletion of every root and leftover"))
                 .clicked()
             {
                 asked = Asked::Confirm {
@@ -811,7 +814,7 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
             }
             if ui
                 .add(
-                    egui::Button::new(RichText::new("إزالة").color(if blocked.is_some() {
+                    egui::Button::new(RichText::new("Uninstall").color(if blocked.is_some() {
                         p.text_faint
                     } else {
                         p.accent_text
@@ -824,7 +827,7 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
                     .corner_radius(CornerRadius::same(8))
                     .min_size(vec2(88.0, 34.0)),
                 )
-                .on_hover_text(blocked.unwrap_or("تشغيل أداة الإزالة مع بدائل تلقائية"))
+                .on_hover_text(blocked.unwrap_or("Run the uninstaller with automatic fallbacks"))
                 .clicked()
             {
                 asked = Asked::Confirm {
@@ -837,7 +840,7 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
             if app.launch_exe.is_some()
                 && ui
                     .add(
-                        egui::Button::new(RichText::new("تشغيل").color(p.ok))
+                        egui::Button::new(RichText::new("Launch").color(p.ok))
                             .fill(p.card)
                             .corner_radius(CornerRadius::same(8))
                             .min_size(vec2(80.0, 34.0)),
@@ -848,7 +851,7 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
             }
             if ui
                 .add(
-                    egui::Button::new(RichText::new("فتح المجلد").color(p.text_dim))
+                    egui::Button::new(RichText::new("Open folder").color(p.text_dim))
                         .fill(p.card)
                         .corner_radius(CornerRadius::same(8))
                         .min_size(vec2(104.0, 34.0)),
@@ -859,7 +862,7 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
             }
             if ui
                 .add(
-                    egui::Button::new(RichText::new("نسخ المسار").color(p.text_dim))
+                    egui::Button::new(RichText::new("Copy path").color(p.text_dim))
                         .fill(p.card)
                         .corner_radius(CornerRadius::same(8))
                         .min_size(vec2(104.0, 34.0)),
@@ -870,7 +873,7 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
             }
             if ui
                 .add(
-                    egui::Button::new(RichText::new("إغلاق").color(p.text_dim))
+                    egui::Button::new(RichText::new("Close").color(p.text_dim))
                         .fill(p.card)
                         .corner_radius(CornerRadius::same(8))
                         .min_size(vec2(80.0, 34.0)),
@@ -891,17 +894,17 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
     let mut asked = Asked::None;
     let mut changed = false;
     ui.set_width(720.0);
-    title(ui, p, "الإعدادات");
+    title(ui, p, "Settings");
 
     egui::ScrollArea::vertical()
         .max_height(560.0)
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            section(ui, p, "المظهر");
+            section(ui, p, "Appearance");
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new("الوضع").color(p.text_dim));
-                    for (m, l) in [(ThemeMode::Light, "فاتح"), (ThemeMode::Dark, "داكن")] {
+                    ui.label(RichText::new("Mode").color(p.text_dim));
+                    for (m, l) in [(ThemeMode::Light, "Light"), (ThemeMode::Dark, "Dark")] {
                         let sel = s.theme == m;
                         if ui
                             .add(
@@ -925,7 +928,7 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
 
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new("لون التمييز").color(p.text_dim));
+                    ui.label(RichText::new("Accent color").color(p.text_dim));
                     for a in Accent::ALL {
                         let (r, g, b) = a.rgb();
                         let col = Color32::from_rgb(r, g, b);
@@ -945,19 +948,19 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
                             s.accent = a;
                             changed = true;
                         }
-                        resp.on_hover_text(a.label_ar());
+                        resp.on_hover_text(a.label());
                     }
                 });
             });
 
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new("كثافة العرض").color(p.text_dim));
+                    ui.label(RichText::new("Density").color(p.text_dim));
                     for d in [Density::Compact, Density::Normal, Density::Relaxed] {
                         let sel = s.density == d;
                         if ui
                             .add(
-                                egui::Button::new(RichText::new(d.label_ar()).color(if sel {
+                                egui::Button::new(RichText::new(d.label()).color(if sel {
                                     p.accent_text
                                 } else {
                                     p.text_dim
@@ -977,8 +980,8 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
 
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new("طريقة العرض").color(p.text_dim));
-                    for (v, l) in [(ViewMode::Cards, "كروت"), (ViewMode::Table, "جدول")] {
+                    ui.label(RichText::new("View").color(p.text_dim));
+                    for (v, l) in [(ViewMode::Cards, "Cards"), (ViewMode::Table, "Table")] {
                         let sel = s.view == v;
                         if ui
                             .add(
@@ -1005,67 +1008,73 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.add(
                             egui::Slider::new(&mut s.card_min_width, 220.0..=460.0)
-                                .text("عرض الكرت"),
+                                .text("Card width"),
                         );
                     });
                 });
             }
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.add(egui::Slider::new(&mut s.icon_size, 28.0..=96.0).text("حجم الأيقونة"));
+                    ui.add(egui::Slider::new(&mut s.icon_size, 28.0..=96.0).text("Icon size"));
                 });
             });
 
-            section(ui, p, "ما يظهر في القائمة");
+            section(ui, p, "Shown in the list");
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.checkbox(&mut s.show_system, "إظهار تطبيقات النظام");
+                    ui.checkbox(&mut s.show_system, "Show system apps");
                 });
             });
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.checkbox(&mut s.show_frameworks, "إظهار مكونات التشغيل المشتركة");
+                    ui.checkbox(&mut s.show_frameworks, "Show shared runtimes");
                 });
             });
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.checkbox(&mut s.show_shortcuts, "إظهار الاختصارات غير المرتبطة");
-                });
-            });
-
-            section(ui, p, "سلوك الحذف");
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.checkbox(&mut s.auto_cascade, "تجربة كل الطرق تلقائياً عند الفشل");
-                });
-            });
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.checkbox(&mut s.create_restore_point, "إنشاء نقطة استعادة قبل الحذف");
-                });
-            });
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.checkbox(&mut s.backup_registry, "نسخ مفتاح السجل احتياطياً");
-                });
-            });
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.checkbox(&mut s.kill_processes, "إغلاق التطبيق قبل الحذف");
+                    ui.checkbox(&mut s.show_shortcuts, "Show unlinked shortcuts");
                 });
             });
 
-            section(ui, p, "عام");
+            section(ui, p, "Deletion behavior");
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.checkbox(&mut s.scan_on_start, "فحص النظام عند التشغيل");
+                    ui.checkbox(
+                        &mut s.auto_cascade,
+                        "Try every method automatically on failure",
+                    );
                 });
             });
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new("الترتيب").color(p.text_dim));
+                    ui.checkbox(
+                        &mut s.create_restore_point,
+                        "Create a restore point before deleting",
+                    );
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.checkbox(&mut s.backup_registry, "Back up the registry key");
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.checkbox(&mut s.kill_processes, "Close the app before deleting");
+                });
+            });
+
+            section(ui, p, "General");
+            ui.horizontal(|ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.checkbox(&mut s.scan_on_start, "Scan on startup");
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(RichText::new("Sort by").color(p.text_dim));
                     egui::ComboBox::from_id_salt("sortkey")
-                        .selected_text(s.sort.label_ar())
+                        .selected_text(s.sort.label())
                         .width(150.0)
                         .show_ui(ui, |ui| {
                             for k in [
@@ -1075,12 +1084,12 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
                                 SortKey::Date,
                                 SortKey::Source,
                             ] {
-                                if ui.selectable_value(&mut s.sort, k, k.label_ar()).clicked() {
+                                if ui.selectable_value(&mut s.sort, k, k.label()).clicked() {
                                     changed = true;
                                 }
                             }
                         });
-                    ui.checkbox(&mut s.sort_desc, "تنازلي");
+                    ui.checkbox(&mut s.sort_desc, "Descending");
                 });
             });
             ui.add_space(4.0);
@@ -1088,7 +1097,7 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(
                         RichText::new(format!(
-                            "الإعدادات محفوظة في: {}",
+                            "Settings saved in: {}",
                             Settings::path().to_string_lossy()
                         ))
                         .font(FontId::monospace(10.5))
@@ -1103,7 +1112,7 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui
                 .add(
-                    egui::Button::new(RichText::new("حفظ وإغلاق").color(Color32::WHITE))
+                    egui::Button::new(RichText::new("Save and close").color(Color32::WHITE))
                         .fill(p.accent)
                         .corner_radius(CornerRadius::same(8))
                         .min_size(vec2(130.0, 34.0)),
@@ -1114,7 +1123,7 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
             }
             if ui
                 .add(
-                    egui::Button::new(RichText::new("إعادة ضبط").color(p.text_dim))
+                    egui::Button::new(RichText::new("Reset").color(p.text_dim))
                         .fill(p.card)
                         .corner_radius(CornerRadius::same(8))
                         .min_size(vec2(110.0, 34.0)),
@@ -1187,12 +1196,6 @@ pub fn nav_pill(ui: &mut Ui, p: &Palette, label: &str, active: bool) -> bool {
     resp.clicked()
 }
 
-/// Re-exported so the module can build unused-import warnings away.
-#[allow(dead_code)]
-fn _unused(_v: Vec2, _w: &dyn Fn(&mut Ui)) {
-    let _ = widgets::is_arabic('ا');
-}
-
 // ---------------------------------------------------------------- backups
 
 /// What the backup manager asked for.
@@ -1215,7 +1218,7 @@ pub fn backups(
     let mut act = BackupAct::None;
     ui.set_width(680.0);
 
-    title(ui, p, "النسخ المحفوظة");
+    title(ui, p, "Saved backups");
     ui.add_space(2.0);
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1229,7 +1232,7 @@ pub fn backups(
                     .color(p.text_faint),
             );
             ui.label(
-                RichText::new("ملف محفوظ")
+                RichText::new("Backup file")
                     .font(FontId::proportional(11.5))
                     .color(p.text_faint),
             );
@@ -1240,7 +1243,7 @@ pub fn backups(
                     .color(p.text_faint),
             );
             ui.label(
-                RichText::new("الحجم الكلي")
+                RichText::new("Total size")
                     .font(FontId::proportional(11.5))
                     .color(p.text_faint),
             );
@@ -1261,7 +1264,7 @@ pub fn backups(
         ui.painter().text(
             r.center(),
             Align2::CENTER_CENTER,
-            "لا توجد نسخ محفوظة",
+            "No saved backups",
             FontId::proportional(13.0),
             p.text_dim,
         );
@@ -1317,7 +1320,7 @@ pub fn backups(
                         ui,
                         ("delbk", b.path.to_string_lossy().to_string()),
                         del,
-                        "حذف",
+                        "Delete",
                         p.danger,
                         p.danger_soft,
                         p.danger,
@@ -1336,13 +1339,13 @@ pub fn backups(
                         ui,
                         ("impbk", b.path.to_string_lossy().to_string()),
                         imp,
-                        "استعادة",
+                        "Restore",
                         p.accent_text,
                         p.accent_soft,
                         p.accent,
                         11.5,
                     )
-                    .on_hover_text("استيراد هذا الملف إلى السجل")
+                    .on_hover_text("Import this file into the registry")
                     .clicked()
                     {
                         act = BackupAct::Import(b.path.to_string_lossy().to_string());
@@ -1356,7 +1359,7 @@ pub fn backups(
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui
                 .add(
-                    egui::Button::new(RichText::new("إغلاق").color(p.text_dim))
+                    egui::Button::new(RichText::new("Close").color(p.text_dim))
                         .fill(p.card)
                         .corner_radius(CornerRadius::same(8))
                         .min_size(vec2(80.0, 34.0)),
@@ -1368,7 +1371,7 @@ pub fn backups(
             }
             if ui
                 .add(
-                    egui::Button::new(RichText::new("فتح المجلد").color(p.text_dim))
+                    egui::Button::new(RichText::new("Open folder").color(p.text_dim))
                         .fill(p.card)
                         .corner_radius(CornerRadius::same(8))
                         .min_size(vec2(104.0, 34.0)),
@@ -1379,9 +1382,9 @@ pub fn backups(
             }
             if !items.is_empty() {
                 let label = if *confirm_clear {
-                    "تأكيد حذف الكل"
+                    "Confirm delete all"
                 } else {
-                    "حذف كل النسخ"
+                    "Delete all backups"
                 };
                 let fill = if *confirm_clear {
                     p.danger

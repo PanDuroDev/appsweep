@@ -75,18 +75,18 @@ pub enum Source {
 }
 
 impl Source {
-    pub fn label_ar(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
-            Source::Registry => "برنامج سطح مكتب",
-            Source::Uwp => "تطبيق متجر",
-            Source::Shortcut => "اختصار",
+            Source::Registry => "Desktop program",
+            Source::Uwp => "Store app",
+            Source::Shortcut => "Shortcut",
         }
     }
-    pub fn short_ar(&self) -> &'static str {
+    pub fn short(&self) -> &'static str {
         match self {
-            Source::Registry => "سطح المكتب",
-            Source::Uwp => "متجر",
-            Source::Shortcut => "اختصار",
+            Source::Registry => "Desktop",
+            Source::Uwp => "Store",
+            Source::Shortcut => "Shortcut",
         }
     }
 }
@@ -226,7 +226,7 @@ impl AppEntry {
     pub fn blocked_reason(&self) -> Option<&'static str> {
         let dir = self.install_dir.as_ref()?;
         if is_protected_dir(dir) {
-            return Some("مجلد محمي من النظام");
+            return Some("System-protected folder");
         }
         None
     }
@@ -348,8 +348,8 @@ mod tests {
             assert!(!a.text().is_empty());
         }
         for s in [Source::Registry, Source::Uwp, Source::Shortcut] {
-            assert!(!s.label_ar().is_empty());
-            assert!(!s.short_ar().is_empty());
+            assert!(!s.label().is_empty());
+            assert!(!s.short().is_empty());
         }
         assert_eq!(RegRoot::Hklm.label(), "HKLM");
         assert_eq!(RegRoot::Hklm32.label(), "HKLM-32");

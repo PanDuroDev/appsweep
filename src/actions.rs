@@ -16,11 +16,11 @@ pub enum Flow {
 }
 
 impl Flow {
-    pub fn title_ar(&self) -> &'static str {
+    pub fn title(&self) -> &'static str {
         match self {
-            Flow::Uninstall => "إزالة التطبيق",
-            Flow::Purge => "حذف نهائي بكل الجذور",
-            Flow::FilesOnly => "حذف الملفات فقط",
+            Flow::Uninstall => "Uninstall app",
+            Flow::Purge => "Purge everything",
+            Flow::FilesOnly => "Delete files only",
         }
     }
 }
@@ -122,13 +122,13 @@ impl Job {
             }
             acc
         });
-        self.summary = format!("نجح {} / تحذير {} / فشل {}", ok, warn, fail);
+        self.summary = format!("{} ok / {} warnings / {} failed", ok, warn, fail);
         // Anything still marked Running never reported back.
         for s in self.steps.iter_mut() {
             if s.status == StepStatus::Running || s.status == StepStatus::Pending {
                 s.status = StepStatus::Fail;
                 if s.detail.is_empty() {
-                    s.detail = "توقفت الخطوة دون نتيجة".into();
+                    s.detail = "Step stopped without a result".into();
                 }
             }
         }
@@ -343,7 +343,7 @@ pub fn delete_reg_key(root: RegRoot, path: &str) -> Result<(), String> {
     let base = RegKey::predef(hive);
     let (parent_path, leaf) = match path.rfind('\\') {
         Some(i) => (&path[..i], &path[i + 1..]),
-        None => return Err("مسار غير صالح".into()),
+        None => return Err("Invalid path".into()),
     };
     let parent = base
         .open_subkey_with_flags(parent_path, view)
@@ -403,8 +403,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
     };
 
     add(
-        "إيقاف العمليات المرتبطة",
-        "إغلاق أي برنامج يعمل من مجلد التطبيق",
+        "Stop related processes",
+        "Close any program running from the app folder",
         match &dir {
             Some(d) if settings.kill_processes => Op::KillProcesses { path: s(d) },
             _ => Op::Nothing,
@@ -415,8 +415,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
 
     if settings.create_restore_point {
         add(
-            "إنشاء نقطة استعادة",
-            "حماية النظام قبل التعديل",
+            "Create a restore point",
+            "Protect the system before the changes",
             Op::RestorePoint {
                 desc: format!("AppSweep - {}", app.name),
             },
@@ -428,8 +428,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
     if settings.backup_registry {
         if let Some((root, key)) = &app.reg_key {
             add(
-                "نسخة احتياطية من السجل",
-                "تصدير مفتاح إزالة التثبيت قبل حذفه",
+                "Registry backup",
+                "Export the uninstall key before deleting it",
                 Op::BackupRegistry {
                     root: *root,
                     key: key.clone(),
@@ -444,8 +444,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
         Flow::Uninstall => {
             if let Some(cmd) = &app.uninstall_string {
                 add(
-                    "أداة الإزالة الرسمية",
-                    "تشغيل أداة إزالة التثبيت الخاصة بالتطبيق",
+                    "Official uninstaller",
+                    "Run the app's own uninstaller",
                     Op::RunUninstaller { cmd: cmd.clone() },
                     true,
                     false,
@@ -453,8 +453,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
             }
             if let Some(cmd) = &app.quiet_uninstall_string {
                 add(
-                    "أداة الإزالة الصامتة",
-                    "محاولة الإزالة بدون واجهة",
+                    "Silent uninstaller",
+                    "Try removing it without a UI",
                     Op::RunUninstaller { cmd: cmd.clone() },
                     true,
                     true,
@@ -462,8 +462,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
             }
             if let Some(prod) = &app.msi_product {
                 add(
-                    "إزالة حزمة MSI",
-                    "استخدام مثبت ويندوز لإزالة الحزمة",
+                    "Remove the MSI package",
+                    "Use Windows Installer to remove the package",
                     Op::RunMsi {
                         product: prod.clone(),
                     },
@@ -474,8 +474,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
             if app.source == Source::Uwp {
                 if let Some(full) = &app.package_full_name {
                     add(
-                        "إزالة حزمة المتجر",
-                        "إزالة الحزمة للمستخدم الحالي",
+                        "Remove the Store package",
+                        "Remove the package for the current user",
                         Op::RemoveUwp {
                             full_name: full.clone(),
                         },
@@ -485,8 +485,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
                 }
             }
             add(
-                "محاولة عبر مدير الحزم",
-                "استخدام أداة الطرفية لإزالة التطبيق",
+                "Try the package manager",
+                "Use the command-line tool to remove the app",
                 Op::RunWinget {
                     name: app.name.clone(),
                 },
@@ -495,8 +495,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
             );
             if let Some(d) = &dir {
                 add(
-                    "حذف مجلد البرنامج",
-                    "حذف بقايا الملفات بعد الإزالة",
+                    "Delete the program folder",
+                    "Delete file leftovers after removal",
                     Op::ForceDelete {
                         paths: safe_paths(vec![s(d)]),
                     },
@@ -506,8 +506,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
             }
             if let Some((root, key)) = &app.reg_key {
                 add(
-                    "حذف مفتاح السجل",
-                    "إزالة الإدخال من قائمة البرامج",
+                    "Delete the registry key",
+                    "Remove the entry from the installed list",
                     Op::DeleteReg {
                         keys: vec![(*root, key.clone())],
                     },
@@ -517,8 +517,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
             }
             if !app.shortcuts.is_empty() {
                 add(
-                    "حذف الاختصارات",
-                    "إزالة أيقونات قائمة ابدأ وسطح المكتب",
+                    "Delete shortcuts",
+                    "Remove Start menu and desktop icons",
                     Op::DeleteShortcuts {
                         paths: app.shortcuts.iter().map(|p| s(p)).collect(),
                     },
@@ -527,8 +527,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
                 );
             }
             add(
-                "تنظيف الملفات المؤقتة",
-                "حذف مخلفات التثبيت المؤقتة",
+                "Clean temporary files",
+                "Delete temporary installer leftovers",
                 Op::CleanTemp,
                 false,
                 true,
@@ -550,8 +550,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
             }
             if !svc_names.is_empty() {
                 add(
-                    "إيقاف وحذف الخدمات",
-                    "إزالة الخدمات التي تعمل من مجلد التطبيق",
+                    "Stop and delete services",
+                    "Remove services running from the app folder",
                     Op::DeleteServices { names: svc_names },
                     false,
                     true,
@@ -565,8 +565,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
                 if !tasks.is_empty() {
                     let n = tasks.len();
                     add(
-                        "حذف المهام المجدولة",
-                        &format!("إزالة {} مهمة تشغيل تلقائي", n),
+                        "Delete scheduled tasks",
+                        &format!("Remove {} startup tasks", n),
                         Op::DeleteTasks { names: tasks },
                         false,
                         true,
@@ -577,8 +577,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
             if app.source == Source::Uwp {
                 if let Some(full) = &app.package_full_name {
                     add(
-                        "إزالة حزمة المتجر",
-                        "إزالة الحزمة قبل حذف بياناتها",
+                        "Remove the Store package",
+                        "Remove the package before deleting its data",
                         Op::RemoveUwp {
                             full_name: full.clone(),
                         },
@@ -590,8 +590,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
 
             if !paths.is_empty() {
                 add(
-                    "حذف الملفات والمجلدات",
-                    "حذف مجلد البرنامج وكل مجلدات البيانات",
+                    "Delete files and folders",
+                    "Delete the program folder and all data folders",
                     Op::ForceDelete {
                         paths: paths.clone(),
                     },
@@ -606,8 +606,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
             }
             if !regs.is_empty() {
                 add(
-                    "حذف مفاتيح السجل",
-                    "إزالة كل إدخالات التطبيق من السجل",
+                    "Delete registry keys",
+                    "Remove all of the app's registry entries",
                     Op::DeleteReg { keys: regs },
                     false,
                     false,
@@ -616,8 +616,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
 
             if !app.shortcuts.is_empty() {
                 add(
-                    "حذف الاختصارات",
-                    "إزالة كل روابط التطبيق",
+                    "Delete shortcuts",
+                    "Remove all of the app's shortcuts",
                     Op::DeleteShortcuts {
                         paths: app.shortcuts.iter().map(|p| s(p)).collect(),
                     },
@@ -627,16 +627,16 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
             }
 
             add(
-                "تنظيف الملفات المؤقتة",
-                "حذف أي بقايا مؤقتة",
+                "Clean temporary files",
+                "Delete any temporary leftovers",
                 Op::CleanTemp,
                 false,
                 true,
             );
 
             add(
-                "جدولة حذف البقايا",
-                "حذف ما تبقى عند إعادة التشغيل",
+                "Schedule leftover deletion",
+                "Delete what remains on reboot",
                 Op::DeleteOnReboot { paths },
                 false,
                 true,
@@ -647,8 +647,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
                 let only = safe_paths(vec![s(d)]);
                 if !only.is_empty() {
                     add(
-                        "نقل المجلد إلى سلة المحذوفات",
-                        "حذف قابل للاستعادة",
+                        "Move the folder to the Recycle Bin",
+                        "Recoverable delete",
                         Op::Recycle {
                             paths: only.clone(),
                         },
@@ -656,8 +656,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
                         true,
                     );
                     add(
-                        "حذف المجلد نهائياً",
-                        "حذف مباشر إذا فشلت سلة المحذوفات",
+                        "Delete the folder permanently",
+                        "Delete directly if the Recycle Bin fails",
                         Op::ForceDelete { paths: only },
                         false,
                         false,
@@ -665,8 +665,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
                 }
             }
             add(
-                "تنظيف الملفات المؤقتة",
-                "حذف مخلفات التثبيت المؤقتة",
+                "Clean temporary files",
+                "Delete temporary installer leftovers",
                 Op::CleanTemp,
                 false,
                 true,
@@ -675,8 +675,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
     }
 
     add(
-        "التحقق من النتيجة",
-        "التأكد من اختفاء الملفات",
+        "Verify the result",
+        "Confirm the files are gone",
         Op::Verify {
             paths: {
                 let mut v = Vec::new();
@@ -740,7 +740,7 @@ fn run_elevated_plan(plan: &PurgePlan) -> Result<PurgeResult, String> {
     let (rc, _) = crate::native::run_elevated(&exe.to_string_lossy(), &params, None, true);
     if rc != 0 {
         // 1223 = user cancelled the UAC prompt
-        return Err(format!("تعذر رفع الصلاحيات (رمز {})", rc));
+        return Err(format!("Could not elevate (code {})", rc));
     }
 
     let text = std::fs::read_to_string(&result_path).map_err(|e| e.to_string())?;
@@ -849,29 +849,29 @@ impl Runner {
 
     fn exec(&mut self, _idx: usize, op: &Op) -> (StepStatus, String) {
         match op {
-            Op::Nothing => (StepStatus::Skip, "لا حاجة لهذه الخطوة".into()),
+            Op::Nothing => (StepStatus::Skip, "This step is not needed".into()),
             Op::KillProcesses { path } => {
                 let n = crate::native::count_processes_in(path);
                 if n == 0 {
-                    return (StepStatus::Skip, "لا توجد عمليات تعمل".into());
+                    return (StepStatus::Skip, "No running processes".into());
                 }
                 let killed = crate::native::kill_processes_in(path);
                 if killed > 0 {
-                    (StepStatus::Ok, format!("تم إغلاق {} عملية", killed))
+                    (StepStatus::Ok, format!("Closed {} processes", killed))
                 } else {
-                    (StepStatus::Warn, "تعذر إغلاق بعض العمليات".into())
+                    (StepStatus::Warn, "Could not close some processes".into())
                 }
             }
             Op::RestorePoint { desc } => {
                 let rc = crate::native::create_restore_point(desc);
                 if rc == 0 {
-                    (StepStatus::Ok, "تم إنشاء نقطة الاستعادة".into())
+                    (StepStatus::Ok, "Restore point created".into())
                 } else if rc == 5 {
-                    (StepStatus::Warn, "تحتاج صلاحيات مدير".into())
+                    (StepStatus::Warn, "Administrator rights are required".into())
                 } else {
                     (
                         StepStatus::Warn,
-                        format!("تعذر إنشاء نقطة استعادة (رمز {})", rc),
+                        format!("Could not create a restore point (code {})", rc),
                     )
                 }
             }
@@ -902,12 +902,12 @@ impl Runner {
                         .unwrap_or_default();
                     (StepStatus::Ok, name)
                 } else {
-                    (StepStatus::Warn, "تعذر تصدير مفتاح السجل".into())
+                    (StepStatus::Warn, "Could not export the registry key".into())
                 }
             }
             Op::RunUninstaller { cmd } => {
                 if cmd.trim().is_empty() {
-                    return (StepStatus::Skip, "لا توجد أداة إزالة".into());
+                    return (StepStatus::Skip, "No uninstaller found".into());
                 }
                 let (file, args) = crate::scan::split_command(cmd);
                 let (rc, code) = if file.to_lowercase().ends_with(".msi") {
@@ -922,15 +922,24 @@ impl Runner {
                 };
                 // 1223: user cancelled UAC
                 if rc == 1223 {
-                    return (StepStatus::Fail, "ألغيت صلاحية المدير".into());
+                    return (
+                        StepStatus::Fail,
+                        "Administrator rights were declined".into(),
+                    );
                 }
                 if rc != 0 {
-                    return (StepStatus::Fail, format!("تعذر تشغيل الأداة (رمز {})", rc));
+                    return (
+                        StepStatus::Fail,
+                        format!("Could not start the tool (code {})", rc),
+                    );
                 }
                 if code == 0 {
-                    (StepStatus::Ok, "انتهت الأداة بنجاح".into())
+                    (StepStatus::Ok, "The tool finished successfully".into())
                 } else {
-                    (StepStatus::Warn, format!("انتهت الأداة بالرمز {}", code))
+                    (
+                        StepStatus::Warn,
+                        format!("The tool exited with code {}", code),
+                    )
                 }
             }
             Op::RunMsi { product } => {
@@ -941,16 +950,22 @@ impl Runner {
                     true,
                 );
                 if rc == 1223 {
-                    (StepStatus::Fail, "ألغيت صلاحية المدير".into())
+                    (
+                        StepStatus::Fail,
+                        "Administrator rights were declined".into(),
+                    )
                 } else if rc == 0 && (code == 0 || code == 3010) {
-                    (StepStatus::Ok, "تمت إزالة الحزمة".into())
+                    (StepStatus::Ok, "Package removed".into())
                 } else {
-                    (StepStatus::Fail, format!("فشلت الإزالة (رمز {})", code))
+                    (StepStatus::Fail, format!("Removal failed (code {})", code))
                 }
             }
             Op::RunWinget { name } => {
                 if !winget_available() {
-                    return (StepStatus::Skip, "أداة الطرفية غير متوفرة".into());
+                    return (
+                        StepStatus::Skip,
+                        "The command-line tool is not available".into(),
+                    );
                 }
                 let cmd = format!(
                     "winget uninstall --name \"{}\" --silent --accept-source-agreements --disable-interactivity",
@@ -958,11 +973,11 @@ impl Runner {
                 );
                 let (rc, code) = crate::native::run_cmd(&cmd, true);
                 if rc == 0 && code == 0 {
-                    (StepStatus::Ok, "تمت الإزالة عبر مدير الحزم".into())
+                    (StepStatus::Ok, "Removed through the package manager".into())
                 } else {
                     (
                         StepStatus::Fail,
-                        format!("لم ينجح مدير الحزم (رمز {})", code),
+                        format!("The package manager failed (code {})", code),
                     )
                 }
             }
@@ -973,11 +988,11 @@ impl Runner {
                 );
                 let (rc, code) = crate::native::run_cmd(&cmd, true);
                 if rc == 0 && code == 0 {
-                    (StepStatus::Ok, "تمت إزالة الحزمة".into())
+                    (StepStatus::Ok, "Package removed".into())
                 } else {
                     (
                         StepStatus::Fail,
-                        format!("تعذرت إزالة الحزمة (رمز {})", code),
+                        format!("Could not remove the package (code {})", code),
                     )
                 }
             }
@@ -987,7 +1002,10 @@ impl Runner {
                 let mut errors: Vec<String> = Vec::new();
                 let guarded = safe_paths(paths.clone());
                 if guarded.is_empty() {
-                    return (StepStatus::Warn, "المسار محمي من الحذف".into());
+                    return (
+                        StepStatus::Warn,
+                        "The path is protected from deletion".into(),
+                    );
                 }
                 for p in &guarded {
                     if !crate::native::path_exists(p) {
@@ -1021,16 +1039,19 @@ impl Runner {
                     }
                 }
                 if failed == 0 {
-                    (StepStatus::Ok, format!("حُذف {} عنصر", deleted))
+                    (StepStatus::Ok, format!("Deleted {} items", deleted))
                 } else if deleted > 0 {
-                    (StepStatus::Warn, format!("حُذف {} وفشل {}", deleted, failed))
+                    (
+                        StepStatus::Warn,
+                        format!("Deleted {}, failed {}", deleted, failed),
+                    )
                 } else {
                     (
                         StepStatus::Fail,
                         errors
                             .first()
                             .cloned()
-                            .unwrap_or_else(|| "تعذر الحذف".into()),
+                            .unwrap_or_else(|| "Deletion failed".into()),
                     )
                 }
             }
@@ -1042,9 +1063,12 @@ impl Runner {
                     }
                 }
                 if ok > 0 {
-                    (StepStatus::Ok, "تم النقل إلى سلة المحذوفات".into())
+                    (StepStatus::Ok, "Moved to the Recycle Bin".into())
                 } else {
-                    (StepStatus::Warn, "تعذر النقل إلى السلة".into())
+                    (
+                        StepStatus::Warn,
+                        "Could not move it to the Recycle Bin".into(),
+                    )
                 }
             }
             Op::DeleteReg { keys } => {
@@ -1079,11 +1103,11 @@ impl Runner {
                     }
                 }
                 if ok > 0 && err.is_none() {
-                    (StepStatus::Ok, "تم حذف الإدخال".into())
+                    (StepStatus::Ok, "Entry deleted".into())
                 } else if let Some(e) = err {
-                    (StepStatus::Fail, format!("تعذر الحذف: {}", e))
+                    (StepStatus::Fail, format!("Could not delete: {}", e))
                 } else {
-                    (StepStatus::Skip, "الإدخال غير موجود".into())
+                    (StepStatus::Skip, "The entry does not exist".into())
                 }
             }
             Op::DeleteShortcuts { paths } => {
@@ -1094,9 +1118,9 @@ impl Runner {
                     }
                 }
                 if n > 0 {
-                    (StepStatus::Ok, format!("حُذف {} اختصار", n))
+                    (StepStatus::Ok, format!("Deleted {} shortcuts", n))
                 } else {
-                    (StepStatus::Skip, "لا اختصارات متبقية".into())
+                    (StepStatus::Skip, "No shortcuts left".into())
                 }
             }
             Op::DeleteServices { names } => {
@@ -1107,9 +1131,12 @@ impl Runner {
                     }
                 }
                 if ok > 0 {
-                    (StepStatus::Ok, format!("أُزيلت {} خدمة", ok))
+                    (StepStatus::Ok, format!("Removed {} services", ok))
                 } else {
-                    (StepStatus::Warn, "تحتاج صلاحيات مدير لحذف الخدمات".into())
+                    (
+                        StepStatus::Warn,
+                        "Administrator rights are required to delete services".into(),
+                    )
                 }
             }
             Op::DeleteTasks { names } => {
@@ -1120,9 +1147,9 @@ impl Runner {
                     }
                 }
                 if ok > 0 {
-                    (StepStatus::Ok, format!("أُزيلت {} مهمة", ok))
+                    (StepStatus::Ok, format!("Removed {} tasks", ok))
                 } else {
-                    (StepStatus::Skip, "لا مهام مجدولة".into())
+                    (StepStatus::Skip, "No scheduled tasks".into())
                 }
             }
             Op::DeleteOnReboot { paths } => {
@@ -1133,9 +1160,12 @@ impl Runner {
                     }
                 }
                 if n > 0 {
-                    (StepStatus::Ok, format!("جُدول حذف {} عنصر عند الإعادة", n))
+                    (
+                        StepStatus::Ok,
+                        format!("Scheduled {} items for deletion on reboot", n),
+                    )
                 } else {
-                    (StepStatus::Skip, "لا بقايا".into())
+                    (StepStatus::Skip, "No leftovers".into())
                 }
             }
             Op::Verify { paths } => {
@@ -1145,9 +1175,9 @@ impl Runner {
                     .collect();
                 if left.is_empty() {
                     self.verified_gone = true;
-                    (StepStatus::Ok, "تمت الإزالة بالكامل".into())
+                    (StepStatus::Ok, "Removed completely".into())
                 } else {
-                    (StepStatus::Warn, "ما زالت بعض الملفات موجودة".into())
+                    (StepStatus::Warn, "Some files still exist".into())
                 }
             }
             Op::CleanTemp => {
@@ -1171,9 +1201,9 @@ impl Runner {
                     }
                 }
                 if n > 0 {
-                    (StepStatus::Ok, format!("نُظّف {} مجلد مؤقت", n))
+                    (StepStatus::Ok, format!("Cleaned {} temporary folders", n))
                 } else {
-                    (StepStatus::Skip, "لا ملفات مؤقتة".into())
+                    (StepStatus::Skip, "No temporary files".into())
                 }
             }
         }
@@ -1219,11 +1249,15 @@ pub fn spawn(app: AppEntry, flow: Flow, settings: Settings, keep_data: bool) -> 
             let mut stop_chain = false;
             for (idx, op, skip_if_gone, optional) in step_ops {
                 if stop_chain && optional {
-                    r.emit(idx, StepStatus::Skip, "تم إيقاف السلسلة بعد فشل سابق");
+                    r.emit(
+                        idx,
+                        StepStatus::Skip,
+                        "Chain stopped after an earlier failure",
+                    );
                     continue;
                 }
                 if skip_if_gone && r.gone() {
-                    r.emit(idx, StepStatus::Skip, "تمت الإزالة مسبقاً");
+                    r.emit(idx, StepStatus::Skip, "Already removed");
                     continue;
                 }
                 r.emit(idx, StepStatus::Running, "");
@@ -1663,7 +1697,7 @@ mod tests {
     #[test]
     fn every_flow_has_a_title() {
         for flow in [Flow::Uninstall, Flow::Purge, Flow::FilesOnly] {
-            assert!(!flow.title_ar().is_empty());
+            assert!(!flow.title().is_empty());
         }
     }
 
