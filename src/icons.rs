@@ -32,9 +32,8 @@ impl IconService {
             .spawn(move || {
                 while let Ok(job) = job_rx.recv() {
                     let raw = crate::native::extract_icon(&job.path, job.size);
-                    let image = raw.map(|r| {
-                        egui::ColorImage::from_rgba_unmultiplied([r.w, r.h], &r.rgba)
-                    });
+                    let image =
+                        raw.map(|r| egui::ColorImage::from_rgba_unmultiplied([r.w, r.h], &r.rgba));
                     if done_tx
                         .send(IconDone {
                             key: job.key,
@@ -81,7 +80,6 @@ pub struct IconCache {
     map: HashMap<String, Option<egui::TextureHandle>>,
 }
 
-
 impl IconCache {
     pub fn get(&self, app: &AppEntry, size: u32) -> Option<&egui::TextureHandle> {
         self.map.get(&format!("{}|{}", app.id, size))?.as_ref()
@@ -100,11 +98,7 @@ impl IconCache {
     ) {
         let key = format!("{}|{}", app_id, size);
         let tex = image.map(|img| {
-            ctx.load_texture(
-                format!("icon-{}", key),
-                img,
-                egui::TextureOptions::LINEAR,
-            )
+            ctx.load_texture(format!("icon-{}", key), img, egui::TextureOptions::LINEAR)
         });
         self.map.insert(key, tex);
     }

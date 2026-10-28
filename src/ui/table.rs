@@ -50,7 +50,13 @@ pub fn row_height(d: Density) -> f32 {
 }
 
 /// Draw the sticky header, returns nothing but consumes vertical space.
-pub fn header(ui: &mut Ui, ctx: &Ctx, width: f32, h: f32, sort_label: &str) -> Option<&'static str> {
+pub fn header(
+    ui: &mut Ui,
+    ctx: &Ctx,
+    width: f32,
+    h: f32,
+    sort_label: &str,
+) -> Option<&'static str> {
     let p = ctx.palette;
     let (rect, _) = ui.allocate_exact_size(vec2(width, h), Sense::hover());
     ui.painter().rect_filled(rect, 0, p.bg_alt);
@@ -173,23 +179,23 @@ pub fn row(
         let r = Rect::from_min_max(pos2(x - c.name_w, rect.top()), pos2(x, rect.bottom()));
         let inner = r.shrink2(vec2(10.0, 0.0));
         let isz = (h - 14.0).clamp(16.0, 28.0);
-        let icon_rect = Rect::from_min_size(
-            pos2(inner.right() - isz, cy - isz * 0.5),
-            vec2(isz, isz),
-        );
+        let icon_rect =
+            Rect::from_min_size(pos2(inner.right() - isz, cy - isz * 0.5), vec2(isz, isz));
         widgets::paint_icon(ui, ctx, app, icon_rect, (isz * 1.5) as u32);
         // Clicking the icon opens the full details sheet.
         if ui
-            .interact(icon_rect, ui.auto_id_with(("rowicon", app.id)), Sense::click())
+            .interact(
+                icon_rect,
+                ui.auto_id_with(("rowicon", app.id)),
+                Sense::click(),
+            )
             .on_hover_text("عرض التفاصيل")
             .clicked()
         {
             act = Some(Act::Details(app.id));
         }
-        let star_rect = Rect::from_min_size(
-            pos2(icon_rect.left() - 26.0, cy - 11.0),
-            vec2(22.0, 22.0),
-        );
+        let star_rect =
+            Rect::from_min_size(pos2(icon_rect.left() - 26.0, cy - 11.0), vec2(22.0, 22.0));
         if widgets::star(ui, ("tstar", app.id), star_rect, app.favorite, p).clicked() {
             act = Some(Act::Favorite(app.id));
         }
@@ -222,7 +228,14 @@ pub fn row(
             pos2(inner.left(), cy - 10.0),
             pos2(id_r.left() - 6.0, cy + 10.0),
         );
-        widgets::text_fit(ui, text_r, &app.name, theme::bold(13.5), p.text, Align2::RIGHT_CENTER);
+        widgets::text_fit(
+            ui,
+            text_r,
+            &app.name,
+            theme::bold(13.5),
+            p.text,
+            Align2::RIGHT_CENTER,
+        );
         if app.is_system {
             let dot_c = pos2(text_r.left() + 3.0, cy);
             widgets::dot_at(ui, dot_c, p.warn);
@@ -268,8 +281,20 @@ pub fn row(
         x -= w;
     };
 
-    cell(ui, c.publisher_w, &app.publisher, FontId::proportional(12.0), p.text_dim);
-    cell(ui, c.version_w, &app.version, FontId::proportional(12.0), p.text_dim);
+    cell(
+        ui,
+        c.publisher_w,
+        &app.publisher,
+        FontId::proportional(12.0),
+        p.text_dim,
+    );
+    cell(
+        ui,
+        c.version_w,
+        &app.version,
+        FontId::proportional(12.0),
+        p.text_dim,
+    );
     cell(
         ui,
         c.size_w,
@@ -277,7 +302,13 @@ pub fn row(
         FontId::proportional(12.0),
         p.text_dim,
     );
-    cell(ui, c.date_w, &app.install_date, FontId::proportional(12.0), p.text_faint);
+    cell(
+        ui,
+        c.date_w,
+        &app.install_date,
+        FontId::proportional(12.0),
+        p.text_faint,
+    );
 
     // source chip
     {
@@ -289,9 +320,11 @@ pub fn row(
         } else {
             (p.text_dim, p.card_hover)
         };
-        let galley = ui
-            .painter()
-            .layout_no_wrap(app.source.short_ar().to_string(), FontId::proportional(11.0), fg);
+        let galley = ui.painter().layout_no_wrap(
+            app.source.short_ar().to_string(),
+            FontId::proportional(11.0),
+            fg,
+        );
         let w = galley.size().x + 12.0;
         let chip = Rect::from_center_size(
             pos2(r.right() - 10.0 - w * 0.5, cy),
@@ -335,8 +368,16 @@ pub fn row(
             ("trow-un", app.id),
             Rect::from_min_size(pos2(bx, by), vec2(un_w, bh)),
             "إزالة",
-            if blocked.is_some() { p.text_faint } else { p.accent_text },
-            if blocked.is_some() { p.card } else { p.accent_soft },
+            if blocked.is_some() {
+                p.text_faint
+            } else {
+                p.accent_text
+            },
+            if blocked.is_some() {
+                p.card
+            } else {
+                p.accent_soft
+            },
             if blocked.is_some() {
                 p.card
             } else {
@@ -357,8 +398,16 @@ pub fn row(
             ("trow-pu", app.id),
             Rect::from_min_size(pos2(bx, by), vec2(pu_w, bh)),
             "حذف كامل",
-            if blocked.is_some() { p.text_faint } else { p.danger },
-            if blocked.is_some() { p.card } else { p.danger_soft },
+            if blocked.is_some() {
+                p.text_faint
+            } else {
+                p.danger
+            },
+            if blocked.is_some() {
+                p.card
+            } else {
+                p.danger_soft
+            },
             if blocked.is_some() {
                 p.card
             } else {
@@ -398,7 +447,8 @@ pub fn row(
                 act = Some(Act::RegKey(id));
                 ui.close();
             }
-            if app.source == crate::model::Source::Uwp && ui.button("فتح في المتجر").clicked() {
+            if app.source == crate::model::Source::Uwp && ui.button("فتح في المتجر").clicked()
+            {
                 act = Some(Act::OpenStore(id));
                 ui.close();
             }

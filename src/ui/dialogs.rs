@@ -145,11 +145,7 @@ pub struct ConfirmState {
 /// that are hard to reproduce (symbols, private-use glyphs, unusual spacing).
 /// An id is short, ASCII and always typeable.
 fn typed_matches(st: &ConfirmState) -> bool {
-    let got: String = st
-        .typed
-        .chars()
-        .filter(|c| c.is_ascii_digit())
-        .collect();
+    let got: String = st.typed.chars().filter(|c| c.is_ascii_digit()).collect();
     !got.is_empty() && got.parse::<u64>().ok() == Some(st.app.id)
 }
 
@@ -167,13 +163,25 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
 
     // App summary card
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 62.0), Sense::hover());
-    ui.painter()
-        .rect(rect, CornerRadius::same(10), p.card, Stroke::new(1.0, p.border), StrokeKind::Inside);
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(10),
+        p.card,
+        Stroke::new(1.0, p.border),
+        StrokeKind::Inside,
+    );
     let name_rect = Rect::from_min_max(
         pos2(rect.left() + 14.0, rect.top() + 8.0),
         pos2(rect.right() - 14.0, rect.top() + 30.0),
     );
-    text_fit(ui, name_rect, &st.app.name, theme::bold(15.0), p.text, Align2::RIGHT_CENTER);
+    text_fit(
+        ui,
+        name_rect,
+        &st.app.name,
+        theme::bold(15.0),
+        p.text,
+        Align2::RIGHT_CENTER,
+    );
     let sub = st
         .app
         .install_dir
@@ -184,7 +192,14 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
         pos2(rect.left() + 14.0, rect.top() + 32.0),
         pos2(rect.right() - 14.0, rect.top() + 54.0),
     );
-    text_fit(ui, sub_rect, &sub, FontId::monospace(11.0), p.text_dim, Align2::RIGHT_CENTER);
+    text_fit(
+        ui,
+        sub_rect,
+        &sub,
+        FontId::monospace(11.0),
+        p.text_dim,
+        Align2::RIGHT_CENTER,
+    );
     ui.add_space(8.0);
 
     if st.stage == 0 {
@@ -256,7 +271,10 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.checkbox(&mut st.auto_cascade, "تجربة الطرق الأخرى تلقائياً عند فشل طريقة");
+                ui.checkbox(
+                    &mut st.auto_cascade,
+                    "تجربة الطرق الأخرى تلقائياً عند فشل طريقة",
+                );
             });
         });
         ui.horizontal(|ui| {
@@ -268,12 +286,11 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let go = egui::Button::new(
-                    RichText::new("متابعة").font(FontId::proportional(13.5)),
-                )
-                .fill(p.accent)
-                .corner_radius(CornerRadius::same(8))
-                .min_size(vec2(110.0, 34.0));
+                let go =
+                    egui::Button::new(RichText::new("متابعة").font(FontId::proportional(13.5)))
+                        .fill(p.accent)
+                        .corner_radius(CornerRadius::same(8))
+                        .min_size(vec2(110.0, 34.0));
                 if ui.add(go).clicked() {
                     st.stage = 1;
                 }
@@ -333,11 +350,7 @@ pub fn confirm(ui: &mut Ui, p: &Palette, st: &mut ConfirmState) -> Asked {
                     p.accent_text,
                 );
                 ui.add_space(22.0);
-                ui.label(
-                    RichText::new(*t)
-                        .font(theme::bold(12.5))
-                        .color(p.text),
-                );
+                ui.label(RichText::new(*t).font(theme::bold(12.5)).color(p.text));
                 ui.label(
                     RichText::new(*d)
                         .font(FontId::proportional(11.5))
@@ -513,7 +526,8 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
                     StepStatus::Fail => (p.danger, "✕"),
                     StepStatus::Skip => (p.text_faint, "—"),
                 };
-                let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
+                let (r, _) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
                 let bg = if st.status == StepStatus::Running {
                     p.accent_soft
                 } else {
@@ -521,7 +535,8 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
                 };
                 ui.painter().rect_filled(r, 7, bg);
                 let ic = pos2(r.right() - 16.0, r.center().y);
-                ui.painter().circle_filled(ic, 9.0, col.gamma_multiply(0.22));
+                ui.painter()
+                    .circle_filled(ic, 9.0, col.gamma_multiply(0.22));
                 ui.painter().text(
                     ic,
                     Align2::CENTER_CENTER,
@@ -533,7 +548,14 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
                     pos2(r.left() + 10.0, r.top() + 4.0),
                     pos2(r.right() - 32.0, r.top() + 21.0),
                 );
-                text_fit(ui, tr, &st.title, theme::bold(12.5), p.text, Align2::RIGHT_CENTER);
+                text_fit(
+                    ui,
+                    tr,
+                    &st.title,
+                    theme::bold(12.5),
+                    p.text,
+                    Align2::RIGHT_CENTER,
+                );
                 let dr = Rect::from_min_max(
                     pos2(r.left() + 10.0, r.top() + 20.0),
                     pos2(r.right() - 32.0, r.top() + 36.0),
@@ -611,7 +633,11 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
             ui.add_space(10.0);
             ui.vertical(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new(&app.name).font(theme::bold(17.0)).color(p.text));
+                    ui.label(
+                        RichText::new(&app.name)
+                            .font(theme::bold(17.0))
+                            .color(p.text),
+                    );
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let src = if app.is_remnant() {
@@ -621,17 +647,15 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
                     } else {
                         app.source.label_ar()
                     };
-                    ui.label(
-                        RichText::new(src)
-                            .font(FontId::proportional(12.0))
-                            .color(if app.is_remnant() {
-                                p.danger
-                            } else if app.is_system {
-                                p.warn
-                            } else {
-                                p.text_dim
-                            }),
-                    );
+                    ui.label(RichText::new(src).font(FontId::proportional(12.0)).color(
+                        if app.is_remnant() {
+                            p.danger
+                        } else if app.is_system {
+                            p.warn
+                        } else {
+                            p.text_dim
+                        },
+                    ));
                 });
             });
         });
@@ -653,100 +677,106 @@ pub fn details(ui: &mut Ui, p: &Palette, app: &AppEntry, ctx: &super::widgets::C
             field(ui, p, "تاريخ التثبيت", &app.install_date, false);
             field(ui, p, "المعمارية", app.arch.text(), false);
 
-    ui.add_space(4.0);
-    section(ui, p, "الملفات");
-    field(
-        ui,
-        p,
-        "مجلد التثبيت",
-        &app.install_dir
-            .as_ref()
-            .map(|d| d.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        true,
-    );
-    field(
-        ui,
-        p,
-        "ملف التشغيل",
-        &app.launch_exe
-            .as_ref()
-            .map(|d| d.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        true,
-    );
-
-    ui.add_space(4.0);
-    section(ui, p, "الإزالة والمصدر");
-    field(
-        ui,
-        p,
-        "أداة الإزالة",
-        app.uninstall_string.as_deref().unwrap_or(""),
-        true,
-    );
-    if let Some(q) = &app.quiet_uninstall_string {
-        field(ui, p, "الإزالة الصامتة", q, true);
-    }
-    if let Some(pkg) = &app.package_full_name {
-        field(ui, p, "حزمة المتجر", pkg, true);
-    }
-    if let Some((root, key)) = &app.reg_key {
-        field(ui, p, "مفتاح السجل", &format!("{}\\{}", root.label(), key), true);
-    }
-    field(
-        ui,
-        p,
-        "عدد الاختصارات",
-        &format!("{}", app.shortcuts.len()),
-        false,
-    );
-    if !app.traces.is_empty() {
-        field(
-            ui,
-            p,
-            "آثار إضافية",
-            &format!("{}", app.traces.len()),
-            false,
-        );
-        for t in app.traces.iter().take(6) {
-            let s = t.to_string_lossy().to_string();
-            field(ui, p, "أثر", &s, true);
-        }
-    }
-    if app.source == Source::Uwp {
-        field(ui, p, "النوع", "حزمة تطبيق حديثة", false);
-    }
-
-    // Free-form note the user can keep per app. Saved with the entry.
-    ui.add_space(6.0);
-    section(ui, p, "ملاحظات");
-    let mut notes = app.notes.clone();
-    ui.add(
-        egui::TextEdit::multiline(&mut notes)
-            .desired_width(ui.available_width())
-            .desired_rows(2)
-            .hint_text("اكتب ملاحظة عن هذا التطبيق")
-            .font(FontId::proportional(12.5)),
-    );
-    if notes != app.notes {
-        asked = Asked::SetNotes {
-            app_id: app.id,
-            notes,
-        };
-    }
-
-    // Elevation state matters here: a non-admin run may fail to delete.
-    if !ctx.elevated {
-        ui.add_space(4.0);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(
-                RichText::new("بدون صلاحيات مدير")
-                    .font(FontId::proportional(11.5))
-                    .color(p.warn),
+            ui.add_space(4.0);
+            section(ui, p, "الملفات");
+            field(
+                ui,
+                p,
+                "مجلد التثبيت",
+                &app.install_dir
+                    .as_ref()
+                    .map(|d| d.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                true,
             );
-        });
-    }
+            field(
+                ui,
+                p,
+                "ملف التشغيل",
+                &app.launch_exe
+                    .as_ref()
+                    .map(|d| d.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                true,
+            );
+
+            ui.add_space(4.0);
+            section(ui, p, "الإزالة والمصدر");
+            field(
+                ui,
+                p,
+                "أداة الإزالة",
+                app.uninstall_string.as_deref().unwrap_or(""),
+                true,
+            );
+            if let Some(q) = &app.quiet_uninstall_string {
+                field(ui, p, "الإزالة الصامتة", q, true);
+            }
+            if let Some(pkg) = &app.package_full_name {
+                field(ui, p, "حزمة المتجر", pkg, true);
+            }
+            if let Some((root, key)) = &app.reg_key {
+                field(
+                    ui,
+                    p,
+                    "مفتاح السجل",
+                    &format!("{}\\{}", root.label(), key),
+                    true,
+                );
+            }
+            field(
+                ui,
+                p,
+                "عدد الاختصارات",
+                &format!("{}", app.shortcuts.len()),
+                false,
+            );
+            if !app.traces.is_empty() {
+                field(
+                    ui,
+                    p,
+                    "آثار إضافية",
+                    &format!("{}", app.traces.len()),
+                    false,
+                );
+                for t in app.traces.iter().take(6) {
+                    let s = t.to_string_lossy().to_string();
+                    field(ui, p, "أثر", &s, true);
+                }
+            }
+            if app.source == Source::Uwp {
+                field(ui, p, "النوع", "حزمة تطبيق حديثة", false);
+            }
+
+            // Free-form note the user can keep per app. Saved with the entry.
+            ui.add_space(6.0);
+            section(ui, p, "ملاحظات");
+            let mut notes = app.notes.clone();
+            ui.add(
+                egui::TextEdit::multiline(&mut notes)
+                    .desired_width(ui.available_width())
+                    .desired_rows(2)
+                    .hint_text("اكتب ملاحظة عن هذا التطبيق")
+                    .font(FontId::proportional(12.5)),
+            );
+            if notes != app.notes {
+                asked = Asked::SetNotes {
+                    app_id: app.id,
+                    notes,
+                };
+            }
+
+            // Elevation state matters here: a non-admin run may fail to delete.
+            if !ctx.elevated {
+                ui.add_space(4.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(
+                        RichText::new("بدون صلاحيات مدير")
+                            .font(FontId::proportional(11.5))
+                            .color(p.warn),
+                    );
+                });
+            }
         });
 
     ui.add_space(12.0);
@@ -1221,8 +1251,13 @@ pub fn backups(
 
     if items.is_empty() {
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 96.0), Sense::hover());
-        ui.painter()
-            .rect(r, CornerRadius::same(10), p.card, Stroke::new(1.0, p.border), StrokeKind::Inside);
+        ui.painter().rect(
+            r,
+            CornerRadius::same(10),
+            p.card,
+            Stroke::new(1.0, p.border),
+            StrokeKind::Inside,
+        );
         ui.painter().text(
             r.center(),
             Align2::CENTER_CENTER,
@@ -1238,10 +1273,8 @@ pub fn backups(
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 6.0;
                 for b in items {
-                    let (r, _) = ui.allocate_exact_size(
-                        vec2(ui.available_width(), 40.0),
-                        Sense::hover(),
-                    );
+                    let (r, _) =
+                        ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
                     ui.painter().rect(
                         r,
                         CornerRadius::same(9),
@@ -1350,7 +1383,11 @@ pub fn backups(
                 } else {
                     "حذف كل النسخ"
                 };
-                let fill = if *confirm_clear { p.danger } else { p.danger_soft };
+                let fill = if *confirm_clear {
+                    p.danger
+                } else {
+                    p.danger_soft
+                };
                 let fg = if *confirm_clear {
                     Color32::WHITE
                 } else {

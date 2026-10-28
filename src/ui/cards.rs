@@ -40,7 +40,11 @@ pub fn card(
     widgets::paint_icon(ui, ctx, app, icon_rect, icon_px);
     // Clicking the icon opens the full details sheet.
     if ui
-        .interact(icon_rect, ui.auto_id_with(("cardicon", app.id)), Sense::click())
+        .interact(
+            icon_rect,
+            ui.auto_id_with(("cardicon", app.id)),
+            Sense::click(),
+        )
         .on_hover_text("عرض التفاصيل")
         .clicked()
     {
@@ -52,15 +56,9 @@ pub fn card(
         pos2(rect.left() + PAD - 4.0, rect.top() + PAD - 4.0),
         vec2(24.0, 24.0),
     );
-    if widgets::star(
-        ui,
-        ("star", app.id),
-        star_rect,
-        app.favorite,
-        p,
-    )
-    .on_hover_text("مفضلة")
-    .clicked()
+    if widgets::star(ui, ("star", app.id), star_rect, app.favorite, p)
+        .on_hover_text("مفضلة")
+        .clicked()
     {
         act = Some(Act::Favorite(app.id));
     }
@@ -162,7 +160,11 @@ pub fn card(
         );
         chip_right = r.left() - 6.0;
     }
-    let src_bg = if app.is_system { p.warn_soft } else { p.accent_soft };
+    let src_bg = if app.is_system {
+        p.warn_soft
+    } else {
+        p.accent_soft
+    };
     let src_fg = if app.is_system { p.warn } else { p.accent_text };
     let r = widgets::chip_right(
         ui,
@@ -255,11 +257,7 @@ pub fn card(
     // A protected folder must never look deletable.
     let blocked = app.blocked_reason();
     let (purge_fg, purge_bg, purge_hover) = match blocked {
-        Some(_) => (
-            p.text_faint,
-            p.card,
-            p.card,
-        ),
+        Some(_) => (p.text_faint, p.card, p.card),
         None => (
             p.danger,
             p.danger_soft,
@@ -337,7 +335,8 @@ pub fn card(
             act = Some(Act::RegKey(id));
             ui.close();
         }
-        if app.source == crate::model::Source::Uwp && ui.button("فتح في المتجر").clicked() {
+        if app.source == crate::model::Source::Uwp && ui.button("فتح في المتجر").clicked()
+        {
             act = Some(Act::OpenStore(id));
             ui.close();
         }

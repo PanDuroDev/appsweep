@@ -91,10 +91,7 @@ pub fn windows_build() -> u32 {
 }
 
 pub fn current_user_sid() -> String {
-    take_string(
-        |out, cap| unsafe { as_current_user_sid(out, cap) },
-        256,
-    )
+    take_string(|out, cap| unsafe { as_current_user_sid(out, cap) }, 256)
 }
 
 pub struct RawIcon {
@@ -108,7 +105,16 @@ pub fn extract_icon(path: &str, size: u32) -> Option<RawIcon> {
     let wpath = wide(path);
     let mut ptr: *mut u8 = std::ptr::null_mut();
     let (mut w, mut h, mut stride) = (0i32, 0i32, 0i32);
-    let ok = unsafe { as_extract_icon(wpath.as_ptr(), size as i32, &mut ptr, &mut w, &mut h, &mut stride) };
+    let ok = unsafe {
+        as_extract_icon(
+            wpath.as_ptr(),
+            size as i32,
+            &mut ptr,
+            &mut w,
+            &mut h,
+            &mut stride,
+        )
+    };
     if ok == 0 || ptr.is_null() || w <= 0 || h <= 0 {
         return None;
     }
@@ -178,7 +184,11 @@ pub fn run_shell(file: &str, params: &str, cwd: Option<&str>, wait: bool) -> (i3
         as_run_shell(
             f.as_ptr(),
             p.as_ptr(),
-            if cwd.is_some() { c.as_ptr() } else { std::ptr::null() },
+            if cwd.is_some() {
+                c.as_ptr()
+            } else {
+                std::ptr::null()
+            },
             wait as i32,
             &mut code,
         )
@@ -195,7 +205,11 @@ pub fn run_elevated(file: &str, params: &str, cwd: Option<&str>, wait: bool) -> 
         as_run_elevated(
             f.as_ptr(),
             p.as_ptr(),
-            if cwd.is_some() { c.as_ptr() } else { std::ptr::null() },
+            if cwd.is_some() {
+                c.as_ptr()
+            } else {
+                std::ptr::null()
+            },
             wait as i32,
             &mut code,
         )
@@ -294,7 +308,13 @@ pub fn force_delete(path: &str) -> DeleteReport {
     let mut failed = 0i32;
     let mut log = vec![0u16; 2048];
     unsafe {
-        as_force_delete(w.as_ptr(), &mut deleted, &mut failed, log.as_mut_ptr(), 2048);
+        as_force_delete(
+            w.as_ptr(),
+            &mut deleted,
+            &mut failed,
+            log.as_mut_ptr(),
+            2048,
+        );
     }
     let end = log.iter().position(|&c| c == 0).unwrap_or(log.len());
     DeleteReport {

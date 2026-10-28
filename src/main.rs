@@ -47,8 +47,14 @@ fn main() {
                 a.name,
                 a.publisher,
                 a.source.short_ar(),
-                a.install_dir.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
-                a.launch_exe.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+                a.install_dir
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                a.launch_exe
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default(),
                 a.shortcuts.len(),
                 a.arch.text()
             );

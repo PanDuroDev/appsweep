@@ -95,11 +95,8 @@ pub fn bidi_line(ui: &Ui, rect: Rect, text: &str, font: FontId, color: Color32) 
             // Out of room: paint what still fits and stop.
             let avail = (x - rect.left()).max(0.0);
             if avail > 4.0 {
-                ui.painter().galley(
-                    pos2(x - w, cy - galley.size().y * 0.5),
-                    galley,
-                    color,
-                );
+                ui.painter()
+                    .galley(pos2(x - w, cy - galley.size().y * 0.5), galley, color);
             }
             break;
         }
@@ -176,7 +173,13 @@ pub fn pill(
 }
 
 /// Star toggle used for favourites.
-pub fn star(ui: &mut Ui, salt: impl std::hash::Hash + std::fmt::Debug, rect: Rect, active: bool, p: &Palette) -> Response {
+pub fn star(
+    ui: &mut Ui,
+    salt: impl std::hash::Hash + std::fmt::Debug,
+    rect: Rect,
+    active: bool,
+    p: &Palette,
+) -> Response {
     let id = ui.auto_id_with(salt);
     let resp = ui.interact(rect, id, Sense::click());
     if resp.hovered() {
@@ -206,7 +209,8 @@ pub fn chip(ui: &mut Ui, text: &str, fg: Color32, bg: Color32) {
     let size = galley.size() + vec2(14.0, 6.0);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
-    ui.painter().galley(rect.center() - galley.size() * 0.5, galley, fg);
+    ui.painter()
+        .galley(rect.center() - galley.size() * 0.5, galley, fg);
 }
 
 /// Draw a chip whose right edge is at `right`, returns the rect it used.
@@ -286,13 +290,7 @@ pub fn dot_at(ui: &Ui, center: egui::Pos2, color: Color32) {
     ui.painter().circle_filled(center, 4.0, color);
 }
 
-pub fn card_rect_style(
-    ui: &mut Ui,
-    ctx: &Ctx,
-    w: f32,
-    h: f32,
-    selected: bool,
-) -> (Rect, Response) {
+pub fn card_rect_style(ui: &mut Ui, ctx: &Ctx, w: f32, h: f32, selected: bool) -> (Rect, Response) {
     let p = ctx.palette;
     let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
     let hovered = resp.hovered();
@@ -310,7 +308,12 @@ pub fn card_rect_style(
     } else {
         Stroke::new(1.0, p.border)
     };
-    ui.painter()
-        .rect(rect, CornerRadius::same(12), fill, stroke, StrokeKind::Inside);
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(12),
+        fill,
+        stroke,
+        StrokeKind::Inside,
+    );
     (rect, resp)
 }

@@ -172,10 +172,9 @@ pub fn apply(ctx: &egui::Context, mode: ThemeMode, accent: Accent, density: Dens
         TextStyle::Heading,
         FontId::new(22.0, FontFamily::Proportional),
     );
-    style.text_styles.insert(
-        TextStyle::Body,
-        FontId::new(14.5, FontFamily::Proportional),
-    );
+    style
+        .text_styles
+        .insert(TextStyle::Body, FontId::new(14.5, FontFamily::Proportional));
     style.text_styles.insert(
         TextStyle::Button,
         FontId::new(14.0, FontFamily::Proportional),
@@ -207,16 +206,29 @@ pub fn load_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
     let candidates: [(&str, &[&str]); 2] = [
-        ("ar", &["C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\tahoma.ttf"]),
-        ("arb", &["C:\\Windows\\Fonts\\segoeuib.ttf", "C:\\Windows\\Fonts\\tahomabd.ttf"]),
+        (
+            "ar",
+            &[
+                "C:\\Windows\\Fonts\\segoeui.ttf",
+                "C:\\Windows\\Fonts\\tahoma.ttf",
+            ],
+        ),
+        (
+            "arb",
+            &[
+                "C:\\Windows\\Fonts\\segoeuib.ttf",
+                "C:\\Windows\\Fonts\\tahomabd.ttf",
+            ],
+        ),
     ];
 
     for (name, paths) in candidates {
         for p in paths {
             if let Ok(bytes) = std::fs::read(p) {
-                fonts
-                    .font_data
-                    .insert(name.to_string(), Arc::new(egui::FontData::from_owned(bytes)));
+                fonts.font_data.insert(
+                    name.to_string(),
+                    Arc::new(egui::FontData::from_owned(bytes)),
+                );
                 break;
             }
         }

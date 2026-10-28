@@ -82,10 +82,7 @@ fn parse_date(raw: &str) -> String {
 }
 
 fn normalize(p: &str) -> String {
-    p.trim()
-        .trim_matches('"')
-        .replace('/', "\\")
-        .to_lowercase()
+    p.trim().trim_matches('"').replace('/', "\\").to_lowercase()
 }
 
 fn is_under(path: &str, root: &str) -> bool {
@@ -208,7 +205,11 @@ fn names_related(a: &str, b: &str) -> bool {
     if wa.is_empty() || wb.is_empty() {
         return false;
     }
-    let (small, big) = if wa.len() <= wb.len() { (&wa, &wb) } else { (&wb, &wa) };
+    let (small, big) = if wa.len() <= wb.len() {
+        (&wa, &wb)
+    } else {
+        (&wb, &wa)
+    };
     small.iter().all(|w| big.iter().any(|x| x == w))
 }
 
@@ -307,7 +308,15 @@ fn guess_main_exe(dir: &Path, app_name: &str) -> Option<PathBuf> {
         if !needle.is_empty() && needle.contains(&stem) && stem.len() > 3 {
             score += 30;
         }
-        for bad in ["unins", "setup", "update", "crash", "helper", "report", "vc_redist"] {
+        for bad in [
+            "unins",
+            "setup",
+            "update",
+            "crash",
+            "helper",
+            "report",
+            "vc_redist",
+        ] {
             if stem.contains(bad) {
                 score = score.saturating_sub(80);
             }
@@ -431,7 +440,11 @@ fn scan_registry(root: RegRoot, path: &str, apps: &mut Vec<AppEntry>, next_id: &
             let (file, _) = split_command(icon);
             let p = PathBuf::from(file.trim().trim_matches('"'));
             if p.is_file() {
-                let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                let ext = p
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
                 if ext == "exe" {
                     launch_exe = Some(p.clone());
                 }
@@ -555,7 +568,10 @@ fn scan_uwp(apps: &mut Vec<AppEntry>, next_id: &mut u64, warnings: &mut Vec<Stri
         let family = id.FamilyName().map(|h| h.to_string()).unwrap_or_default();
         let mut name = pkg.DisplayName().map(|h| h.to_string()).unwrap_or_default();
         if name.is_empty() || name.starts_with("ms-resource:") {
-            name = id.Name().map(|h| h.to_string()).unwrap_or_else(|_| family.clone());
+            name = id
+                .Name()
+                .map(|h| h.to_string())
+                .unwrap_or_else(|_| family.clone());
         }
         if name.is_empty() {
             continue;
@@ -648,7 +664,11 @@ fn find_package_logo(dir: &Path) -> Option<PathBuf> {
                 walk(&p, depth + 1, best);
                 continue;
             }
-            let fname = p.file_name().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+            let fname = p
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
             if !fname.ends_with(".png") {
                 continue;
             }
@@ -820,7 +840,11 @@ fn scan_shortcuts(apps: &mut Vec<AppEntry>, next_id: &mut u64) {
         e.icon_path = e.launch_exe.clone();
         e.install_dir = dir;
         e.shortcuts.push(lnk);
-        e.is_system = e.install_dir.as_deref().map(is_system_path).unwrap_or(false);
+        e.is_system = e
+            .install_dir
+            .as_deref()
+            .map(is_system_path)
+            .unwrap_or(false);
         apps.push(e);
     }
 }
@@ -833,7 +857,9 @@ fn dedupe(apps: Vec<AppEntry>) -> Vec<AppEntry> {
         let mut merged = false;
         for existing in out.iter_mut() {
             let same_exe = match (&app.launch_exe, &existing.launch_exe) {
-                (Some(a), Some(b)) => normalize(&a.to_string_lossy()) == normalize(&b.to_string_lossy()),
+                (Some(a), Some(b)) => {
+                    normalize(&a.to_string_lossy()) == normalize(&b.to_string_lossy())
+                }
                 _ => false,
             };
             let same_dir = match (&app.install_dir, &existing.install_dir) {
@@ -1015,4 +1041,63 @@ pub fn scan_all() -> ScanResult {
     });
 
     ScanResult { apps, warnings }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn weak_words_are_generic_only() {
+        for w in ["application", "windows", "microsoft", "x64", "launcher"] {
+            assert!(weak_word(w), "{w} should be weak");
+        }
+        for w in ["roblox", "chrome", "krita", "verifier"] {
+            assert!(!weak_word(w), "{w} should be distinctive");
+        }
+    }
+
+    #[test]
+    fn name_words_drops_generic_parts() {
+        assert_eq!(name_words("Google Chrome"), vec!["chrome".to_string()]);
+        assert_eq!(name_words("Roblox Player"), vec!["roblox".to_string()]);
+        assert!(name_words("Windows Media Player").is_empty());
+    }
+
+    #[test]
+    fn names_related_needs_shared_distinctive_words() {
+        assert!(names_related("Roblox", "Roblox Player"));
+        assert!(!names_related("Roblox", "Windows Media Player"));
+        assert!(!names_related("Google Chrome", "Application Verifier"));
+        assert!(!names_related("C:\\Program Files", "App"));
+    }
+
+    #[test]
+    fn best_name_match_never_attaches_a_wrong_app() {
+        let cands = [(0usize, "Windows Media Player"), (1, "Roblox Player")];
+        assert_eq!(best_name_match("Roblox", cands.into_iter()), Some(1));
+    }
+
+    #[test]
+    fn best_name_match_returns_none_on_a_tie() {
+        let cands = [(0usize, "Acme Foo"), (1, "Acme Bar")];
+        assert_eq!(best_name_match("Acme", cands.into_iter()), None);
+    }
+
+    #[test]
+    fn guid_like_names_are_detected() {
+        assert!(looks_like_guid("db2168da-0bf0-5419-9f76-8b9058f9bde6"));
+        assert!(!looks_like_guid("Roblox"));
+        assert!(!looks_like_guid("db2168da-0bf0-5419-9f76"));
+    }
+
+    #[test]
+    fn pe_arch_reads_the_real_header() {
+        assert_eq!(pe_arch(Path::new("no-such-file-appsweep.exe")), None);
+        let me = std::env::current_exe().expect("test exe");
+        let arch = pe_arch(&me).expect("the test binary is a PE image");
+        if cfg!(target_arch = "x86_64") {
+            assert_eq!(arch, Arch::X64);
+        }
+    }
 }

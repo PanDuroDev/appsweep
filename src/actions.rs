@@ -48,52 +48,21 @@ pub struct Step {
 #[derive(Clone, Debug)]
 pub enum Op {
     Nothing,
-    KillProcesses {
-        path: String,
-    },
-    RestorePoint {
-        desc: String,
-    },
-    BackupRegistry {
-        root: RegRoot,
-        key: String,
-    },
-    RunUninstaller {
-        cmd: String,
-    },
-    RunMsi {
-        product: String,
-    },
-    RunWinget {
-        name: String,
-    },
-    RemoveUwp {
-        full_name: String,
-    },
-    ForceDelete {
-        paths: Vec<String>,
-    },
-    Recycle {
-        paths: Vec<String>,
-    },
-    DeleteReg {
-        keys: Vec<(RegRoot, String)>,
-    },
-    DeleteShortcuts {
-        paths: Vec<String>,
-    },
-    DeleteServices {
-        names: Vec<String>,
-    },
-    DeleteTasks {
-        names: Vec<String>,
-    },
-    DeleteOnReboot {
-        paths: Vec<String>,
-    },
-    Verify {
-        paths: Vec<String>,
-    },
+    KillProcesses { path: String },
+    RestorePoint { desc: String },
+    BackupRegistry { root: RegRoot, key: String },
+    RunUninstaller { cmd: String },
+    RunMsi { product: String },
+    RunWinget { name: String },
+    RemoveUwp { full_name: String },
+    ForceDelete { paths: Vec<String> },
+    Recycle { paths: Vec<String> },
+    DeleteReg { keys: Vec<(RegRoot, String)> },
+    DeleteShortcuts { paths: Vec<String> },
+    DeleteServices { names: Vec<String> },
+    DeleteTasks { names: Vec<String> },
+    DeleteOnReboot { paths: Vec<String> },
+    Verify { paths: Vec<String> },
     CleanTemp,
 }
 
@@ -283,7 +252,11 @@ fn subdirs(root: &Path) -> Vec<PathBuf> {
 pub fn find_traces(app: &AppEntry) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     let mut push = |p: PathBuf| {
-        if p.exists() && !out.iter().any(|x| norm(&x.to_string_lossy()) == norm(&p.to_string_lossy())) {
+        if p.exists()
+            && !out
+                .iter()
+                .any(|x| norm(&x.to_string_lossy()) == norm(&p.to_string_lossy()))
+        {
             out.push(p);
         }
     };
@@ -294,7 +267,11 @@ pub fn find_traces(app: &AppEntry) -> Vec<PathBuf> {
             if let Ok(local) = std::env::var("LOCALAPPDATA") {
                 let base = PathBuf::from(local).join("Packages");
                 for d in subdirs(&base) {
-                    let n = d.file_name().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                    let n = d
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
                     if n.starts_with(&family.to_lowercase()) {
                         push(d);
                     }
@@ -414,7 +391,11 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
     let dir = app.install_dir.clone();
     // "Keep user data" means: only touch the program folder, never the
     // AppData / ProgramData leftovers that hold the user's own files.
-    let traces = if keep_data { Vec::new() } else { find_traces(app) };
+    let traces = if keep_data {
+        Vec::new()
+    } else {
+        find_traces(app)
+    };
 
     add(
         "إيقاف العمليات المرتبطة",
@@ -663,7 +644,9 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
                     add(
                         "نقل المجلد إلى سلة المحذوفات",
                         "حذف قابل للاستعادة",
-                        Op::Recycle { paths: only.clone() },
+                        Op::Recycle {
+                            paths: only.clone(),
+                        },
                         false,
                         true,
                     );
@@ -852,11 +835,7 @@ impl Runner {
             .as_ref()
             .map(|(r, k)| !reg_key_exists(*r, k))
             .unwrap_or(true);
-        let pkg_gone = self
-            .app
-            .package_full_name
-            .is_none()
-            || self.app.source != Source::Uwp;
+        let pkg_gone = self.app.package_full_name.is_none() || self.app.source != Source::Uwp;
         if dir_gone && reg_gone && pkg_gone {
             self.verified_gone = true;
         }
@@ -873,10 +852,7 @@ impl Runner {
                 }
                 let killed = crate::native::kill_processes_in(path);
                 if killed > 0 {
-                    (
-                        StepStatus::Ok,
-                        format!("تم إغلاق {} عملية", killed),
-                    )
+                    (StepStatus::Ok, format!("تم إغلاق {} عملية", killed))
                 } else {
                     (StepStatus::Warn, "تعذر إغلاق بعض العمليات".into())
                 }
@@ -902,7 +878,9 @@ impl Runner {
                     .chars()
                     .map(|c| if c.is_alphanumeric() { c } else { '_' })
                     .collect();
-                let file = self.backup_dir.join(format!("{}-{}.reg", safe, root.label()));
+                let file = self
+                    .backup_dir
+                    .join(format!("{}-{}.reg", safe, root.label()));
                 let full = match root {
                     RegRoot::Hklm => format!("HKLM\\{}", key),
                     RegRoot::Hklm32 => format!("HKLM\\{}", key),
@@ -942,18 +920,12 @@ impl Runner {
                     return (StepStatus::Fail, "ألغيت صلاحية المدير".into());
                 }
                 if rc != 0 {
-                    return (
-                        StepStatus::Fail,
-                        format!("تعذر تشغيل الأداة (رمز {})", rc),
-                    );
+                    return (StepStatus::Fail, format!("تعذر تشغيل الأداة (رمز {})", rc));
                 }
                 if code == 0 {
                     (StepStatus::Ok, "انتهت الأداة بنجاح".into())
                 } else {
-                    (
-                        StepStatus::Warn,
-                        format!("انتهت الأداة بالرمز {}", code),
-                    )
+                    (StepStatus::Warn, format!("انتهت الأداة بالرمز {}", code))
                 }
             }
             Op::RunMsi { product } => {
@@ -968,10 +940,7 @@ impl Runner {
                 } else if rc == 0 && (code == 0 || code == 3010) {
                     (StepStatus::Ok, "تمت إزالة الحزمة".into())
                 } else {
-                    (
-                        StepStatus::Fail,
-                        format!("فشلت الإزالة (رمز {})", code),
-                    )
+                    (StepStatus::Fail, format!("فشلت الإزالة (رمز {})", code))
                 }
             }
             Op::RunWinget { name } => {
@@ -1047,19 +1016,16 @@ impl Runner {
                     }
                 }
                 if failed == 0 {
-                    (
-                        StepStatus::Ok,
-                        format!("حُذف {} عنصر", deleted),
-                    )
+                    (StepStatus::Ok, format!("حُذف {} عنصر", deleted))
                 } else if deleted > 0 {
-                    (
-                        StepStatus::Warn,
-                        format!("حُذف {} وفشل {}", deleted, failed),
-                    )
+                    (StepStatus::Warn, format!("حُذف {} وفشل {}", deleted, failed))
                 } else {
                     (
                         StepStatus::Fail,
-                        errors.first().cloned().unwrap_or_else(|| "تعذر الحذف".into()),
+                        errors
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| "تعذر الحذف".into()),
                     )
                 }
             }
@@ -1176,10 +1142,7 @@ impl Runner {
                     self.verified_gone = true;
                     (StepStatus::Ok, "تمت الإزالة بالكامل".into())
                 } else {
-                    (
-                        StepStatus::Warn,
-                        "ما زالت بعض الملفات موجودة".into(),
-                    )
+                    (StepStatus::Warn, "ما زالت بعض الملفات موجودة".into())
                 }
             }
             Op::CleanTemp => {
@@ -1194,7 +1157,9 @@ impl Runner {
                                 .and_then(|s| s.to_str())
                                 .map(norm)
                                 .unwrap_or_default();
-                            if name.contains(&needle) && crate::native::force_delete(&s(&d)).failed == 0 {
+                            if name.contains(&needle)
+                                && crate::native::force_delete(&s(&d)).failed == 0
+                            {
                                 n += 1;
                             }
                         }
@@ -1216,9 +1181,12 @@ pub fn spawn(app: AppEntry, flow: Flow, settings: Settings, keep_data: bool) -> 
     let app_id = app.id;
     let app_name = app.name.clone();
 
-    let backup_dir = crate::icons::app_data_dir()
-        .join("backups")
-        .join(app_name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect::<String>());
+    let backup_dir = crate::icons::app_data_dir().join("backups").join(
+        app_name
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect::<String>(),
+    );
 
     let runner = Runner {
         tx: tx.clone(),

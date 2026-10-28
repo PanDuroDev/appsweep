@@ -309,7 +309,11 @@ impl AppSweep {
     fn handle(&mut self, act: Act, ctx: &egui::Context) {
         match act {
             Act::Select(id) => {
-                self.selected = if self.selected == Some(id) { None } else { Some(id) };
+                self.selected = if self.selected == Some(id) {
+                    None
+                } else {
+                    Some(id)
+                };
             }
             Act::Uninstall(id) => self.ask_delete(id, Flow::Uninstall, 0, true),
             Act::Purge(id) => self.ask_delete(id, Flow::Purge, 1, false),
@@ -351,7 +355,11 @@ impl AppSweep {
                     let text = app
                         .reveal_path()
                         .map(|p| p.to_string_lossy().to_string())
-                        .or_else(|| app.install_dir.as_ref().map(|p| p.to_string_lossy().to_string()));
+                        .or_else(|| {
+                            app.install_dir
+                                .as_ref()
+                                .map(|p| p.to_string_lossy().to_string())
+                        });
                     if let Some(t) = text {
                         ctx.copy_text(t);
                         self.set_status("تم نسخ المسار");
@@ -422,10 +430,7 @@ impl AppSweep {
                         .chars()
                         .map(|c| if c.is_ascii_alphanumeric() { c } else { '+' })
                         .collect();
-                    crate::native::shell_open(&format!(
-                        "ms-windows-store://search/?query={}",
-                        q
-                    ));
+                    crate::native::shell_open(&format!("ms-windows-store://search/?query={}", q));
                     self.set_status("تم فتح المتجر");
                 }
             }
@@ -570,7 +575,11 @@ impl AppSweep {
                                         SortKey::Date,
                                         SortKey::Source,
                                     ] {
-                                        ui.selectable_value(&mut self.settings.sort, k, k.label_ar());
+                                        ui.selectable_value(
+                                            &mut self.settings.sort,
+                                            k,
+                                            k.label_ar(),
+                                        );
                                     }
                                 });
                             if !self.status.is_empty() {
@@ -730,15 +739,9 @@ impl AppSweep {
                     let hh = 30.0;
                     sort_click = table::header(ui, &c, width, hh, sort_label);
                     let rh = self.settings.density.row_height();
-                    if let Some(a) = table::body(
-                        ui,
-                        &c,
-                        &apps,
-                        selected,
-                        rh,
-                        width,
-                        self.settings.density,
-                    ) {
+                    if let Some(a) =
+                        table::body(ui, &c, &apps, selected, rh, width, self.settings.density)
+                    {
                         act = Some(a);
                     }
                 }
@@ -790,9 +793,7 @@ impl AppSweep {
                     if let Some(e) = entry {
                         match crate::actions::delete_backup(&e) {
                             Ok(()) => self.set_status("تم حذف النسخة"),
-                            Err(err) => {
-                                self.set_status(format!("فشل حذف النسخة: {}", err))
-                            }
+                            Err(err) => self.set_status(format!("فشل حذف النسخة: {}", err)),
                         }
                     }
                     self.backups = crate::actions::list_backups();
@@ -802,9 +803,7 @@ impl AppSweep {
                         Ok(n) => {
                             self.set_status(format!("تم حذف {} نسخة", n));
                         }
-                        Err(err) => {
-                            self.set_status(format!("فشل حذف النسخ: {}", err))
-                        }
+                        Err(err) => self.set_status(format!("فشل حذف النسخ: {}", err)),
                     }
                     self.backups = crate::actions::list_backups();
                 }
@@ -861,9 +860,8 @@ impl AppSweep {
         }
 
         if let Some(state) = &mut self.confirm {
-            let (asked, closed) = dialogs::show_modal(ctx, &p, "confirm", |ui| {
-                dialogs::confirm(ui, &p, state)
-            });
+            let (asked, closed) =
+                dialogs::show_modal(ctx, &p, "confirm", |ui| dialogs::confirm(ui, &p, state));
             let asked = if closed { Asked::Close } else { asked };
             match asked {
                 Asked::Close => self.confirm = None,
@@ -887,11 +885,17 @@ impl AppSweep {
 
         if let Some(job) = &mut self.job {
             job.poll();
-            let (asked, closed) = dialogs::show_modal(ctx, &p, "job", |ui| dialogs::job(ui, &p, job));
-            let asked = if closed && job.done { Asked::Close } else { asked };
+            let (asked, closed) =
+                dialogs::show_modal(ctx, &p, "job", |ui| dialogs::job(ui, &p, job));
+            let asked = if closed && job.done {
+                Asked::Close
+            } else {
+                asked
+            };
             match asked {
                 Asked::Close => {
-                    let success = job.done && !job.steps.iter().any(|s| s.status == StepStatus::Fail);
+                    let success =
+                        job.done && !job.steps.iter().any(|s| s.status == StepStatus::Fail);
                     self.job = None;
                     self.cache.clear();
                     if success {
@@ -920,8 +924,9 @@ impl AppSweep {
                         need: &need,
                         icon: self.settings.icon_size,
                     };
-                    let (asked, closed) =
-                        dialogs::show_modal(ctx, &p, "details", |ui| dialogs::details(ui, &p, &app, &c));
+                    let (asked, closed) = dialogs::show_modal(ctx, &p, "details", |ui| {
+                        dialogs::details(ui, &p, &app, &c)
+                    });
                     let asked = if closed { Asked::Close } else { asked };
                     let pending = need.into_inner();
                     for (id, size, path) in pending {

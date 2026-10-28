@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    # windows-2022 = Server 2022 image, ships MSVC + SDK, matches Win10 ABI.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+
+      - name: fmt
+        run: cargo fmt --check
+
+      - name: clippy
+        run: cargo clippy --release -- -D warnings
+
+      - name: test
+        run: cargo test --release
+
+      - name: selftest
+        run: .\target\release\appsweep.exe --selftest
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AppSweep
+          path: |
+            target/release/appsweep.exe
+            release/README.txt

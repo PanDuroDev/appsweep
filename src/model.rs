@@ -208,8 +208,16 @@ impl AppEntry {
         if self.source != Source::Registry {
             return false;
         }
-        let dir_gone = self.install_dir.as_ref().map(|d| !d.exists()).unwrap_or(true);
-        let exe_gone = self.launch_exe.as_ref().map(|e| !e.exists()).unwrap_or(true);
+        let dir_gone = self
+            .install_dir
+            .as_ref()
+            .map(|d| !d.exists())
+            .unwrap_or(true);
+        let exe_gone = self
+            .launch_exe
+            .as_ref()
+            .map(|e| !e.exists())
+            .unwrap_or(true);
         dir_gone && exe_gone && self.icon_path.is_none()
     }
 
@@ -281,5 +289,56 @@ pub fn human_size(bytes: u64) -> String {
         format!("{:.1} {}", v, UNITS[i])
     } else {
         format!("{:.2} {}", v, UNITS[i])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn search_matches_substrings_and_subsequences() {
+        assert!(matches("Google Chrome", "chrome"));
+        assert!(matches("Google Chrome", "gch"));
+        assert!(matches("anything", ""));
+        assert!(!matches("Google Chrome", "firefox"));
+    }
+
+    #[test]
+    fn human_size_uses_binary_units() {
+        assert_eq!(human_size(0), "—");
+        assert_eq!(human_size(512), "512 B");
+        assert_eq!(human_size(1024), "1.00 KB");
+        assert_eq!(human_size(100 * 1024 * 1024), "100 MB");
+        assert_eq!(human_size(3 * 1024 * 1024 * 1024), "3.00 GB");
+    }
+
+    #[test]
+    fn protected_dirs_are_never_deletable() {
+        for p in [
+            r"c:\",
+            r"C:\Windows",
+            r"C:\Windows\System32",
+            r"C:\Program Files",
+            r"C:\Program Files (x86)",
+            r"C:\ProgramData",
+            r"C:\Users",
+        ] {
+            assert!(is_protected_dir(Path::new(p)), "{p} must be protected");
+        }
+        assert!(!is_protected_dir(Path::new(r"D:\Apps\Demo")));
+        assert!(!is_protected_dir(Path::new(r"C:\Program Files\7-Zip")));
+    }
+
+    #[test]
+    fn remnant_needs_a_missing_install() {
+        let mut e = AppEntry::new(1, "Gone".into(), Source::Registry);
+        assert!(e.is_remnant());
+        e.source = Source::Uwp;
+        assert!(!e.is_remnant());
+        let mut e = AppEntry::new(2, "Here".into(), Source::Registry);
+        e.install_dir = Some(std::env::temp_dir());
+        assert!(!e.is_remnant());
     }
 }
