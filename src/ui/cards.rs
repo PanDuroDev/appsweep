@@ -5,10 +5,19 @@ use crate::model::{human_size, AppEntry};
 use crate::theme;
 use egui::{pos2, vec2, Align2, FontId, Rect, Sense, Ui};
 
-const PAD: f32 = 14.0;
+const PAD: f32 = 16.0;
+const CHIP_ROW: f32 = 24.0;
+const ACTION_H: f32 = 30.0;
+/// A chip narrower than this is dropped instead of drawn as an ellipsis.
+const CHIP_MIN: f32 = 24.0;
 
 pub fn card_height(icon: f32) -> f32 {
-    PAD * 2.0 + icon.max(40.0) + 8.0 + 22.0 + 12.0 + 30.0
+    PAD * 2.0 + icon.max(40.0) + 8.0 + CHIP_ROW + 10.0 + ACTION_H
+}
+
+/// Width still available for the next chip: it must stop at the card padding.
+fn chip_room(card_right: f32, chip_x: f32) -> f32 {
+    (card_right - PAD - chip_x).max(0.0)
 }
 
 pub fn card(
@@ -50,8 +59,8 @@ pub fn card(
 
     // --- star (top right)
     let star_rect = Rect::from_min_size(
-        pos2(rect.right() - PAD - 20.0, rect.top() + PAD - 4.0),
-        vec2(24.0, 24.0),
+        pos2(rect.right() - PAD - 32.0, rect.top() + PAD - 8.0),
+        vec2(32.0, 32.0),
     );
     if widgets::star(ui, ("star", app.id), star_rect, app.favorite, p)
         .on_hover_text("Favorite")
@@ -62,7 +71,7 @@ pub fn card(
 
     // --- name and publisher, to the right of the icon
     let text_left = icon_rect.right() + 10.0;
-    let text_right = rect.right() - PAD - 28.0;
+    let text_right = rect.right() - PAD - 36.0;
     let name_rect = Rect::from_min_max(
         pos2(text_left, rect.top() + PAD + 2.0),
         pos2(text_right, rect.top() + PAD + 22.0),
@@ -84,7 +93,7 @@ pub fn card(
     };
     let pub_rect = Rect::from_min_max(
         pos2(text_left, name_rect.bottom() + 2.0),
-        pos2(text_right, name_rect.bottom() + 18.0),
+        pos2(text_right, name_rect.bottom() + 22.0),
     );
     if pub_rect.width() > 10.0 {
         widgets::text_fit(
@@ -100,8 +109,12 @@ pub fn card(
     // --- chips row
     let chip_y = rect.top() + PAD + isz + 8.0;
     let mut chip_x = rect.left() + PAD;
-    let max_chip_w = width - PAD * 2.0;
     let chip_font = 11.0;
+    let meta_bg = if p.dark {
+        egui::Color32::from_rgb(32, 39, 52)
+    } else {
+        egui::Color32::from_rgb(238, 241, 247)
+    };
 
     // Numeric id, first chip: this is what the delete gate asks for.
     {
@@ -122,60 +135,52 @@ pub fn card(
         chip_x = r.right() + 6.0;
     }
 
+    // Optional chips are dropped when the card is too narrow for them.
     let size_text = human_size(app.size_bytes);
-    if size_text != "—" {
+    if size_text != "—" && chip_room(rect.right(), chip_x) >= CHIP_MIN {
+        let room = chip_room(rect.right(), chip_x);
         let r = widgets::chip_left(
-            ui,
-            chip_x,
-            chip_y,
-            &size_text,
-            p.text_dim,
-            if p.dark {
-                egui::Color32::from_rgb(32, 39, 52)
-            } else {
-                egui::Color32::from_rgb(238, 241, 247)
-            },
-            chip_font,
-            max_chip_w,
+            ui, chip_x, chip_y, &size_text, p.text_dim, meta_bg, chip_font, room,
         );
         chip_x = r.right() + 6.0;
     }
-    if !app.version.is_empty() {
+    if !app.version.is_empty() && chip_room(rect.right(), chip_x) >= CHIP_MIN {
+        let room = chip_room(rect.right(), chip_x);
         let r = widgets::chip_left(
             ui,
             chip_x,
             chip_y,
             &app.version,
             p.text_dim,
-            if p.dark {
-                egui::Color32::from_rgb(32, 39, 52)
-            } else {
-                egui::Color32::from_rgb(238, 241, 247)
-            },
+            meta_bg,
             chip_font,
-            max_chip_w,
+            room,
         );
         chip_x = r.right() + 6.0;
     }
-    let src_bg = if app.is_system {
-        p.warn_soft
-    } else {
-        p.accent_soft
-    };
-    let src_fg = if app.is_system { p.warn } else { p.accent_text };
-    let r = widgets::chip_left(
-        ui,
-        chip_x,
-        chip_y,
-        app.source.short(),
-        src_fg,
-        src_bg,
-        chip_font,
-        max_chip_w,
-    );
-    chip_x = r.right() + 6.0;
-    if app.is_system {
-        widgets::chip_left(
+    if chip_room(rect.right(), chip_x) >= CHIP_MIN {
+        let room = chip_room(rect.right(), chip_x);
+        let src_bg = if app.is_system {
+            p.warn_soft
+        } else {
+            p.accent_soft
+        };
+        let src_fg = if app.is_system { p.warn } else { p.accent_text };
+        let r = widgets::chip_left(
+            ui,
+            chip_x,
+            chip_y,
+            app.source.short(),
+            src_fg,
+            src_bg,
+            chip_font,
+            room,
+        );
+        chip_x = r.right() + 6.0;
+    }
+    if app.is_system && chip_room(rect.right(), chip_x) >= CHIP_MIN {
+        let room = chip_room(rect.right(), chip_x);
+        let r = widgets::chip_left(
             ui,
             chip_x,
             chip_y,
@@ -183,11 +188,12 @@ pub fn card(
             p.warn,
             p.warn_soft,
             chip_font,
-            max_chip_w,
+            room,
         );
-        chip_x += 44.0;
+        chip_x = r.right() + 6.0;
     }
-    if app.is_remnant() {
+    if app.is_remnant() && chip_room(rect.right(), chip_x) >= CHIP_MIN {
+        let room = chip_room(rect.right(), chip_x);
         widgets::chip_left(
             ui,
             chip_x,
@@ -196,17 +202,17 @@ pub fn card(
             p.danger,
             p.danger_soft,
             chip_font,
-            max_chip_w,
+            room,
         );
     }
 
     // --- action row
-    let btn_y = rect.bottom() - PAD - 28.0;
-    let btn_h = 28.0;
+    let btn_y = rect.bottom() - PAD - ACTION_H;
+    let btn_h = ACTION_H;
     let mut x = rect.left() + PAD;
 
     // Folder button on the far left.
-    let folder = Rect::from_min_size(pos2(x, btn_y), vec2(30.0, btn_h));
+    let folder = Rect::from_min_size(pos2(x, btn_y), vec2(btn_h, btn_h));
     let folder_resp = widgets::pill(
         ui,
         ("reveal", app.id),
@@ -224,7 +230,7 @@ pub fn card(
     if folder_resp.on_hover_text("Open the app folder").clicked() {
         act = Some(Act::Reveal(app.id));
     }
-    x += 36.0;
+    x += btn_h + 8.0;
 
     let files_w = 62.0;
     let files_rect = Rect::from_min_size(pos2(x, btn_y), vec2(files_w, btn_h));
@@ -247,7 +253,7 @@ pub fn card(
     {
         act = Some(Act::Files(app.id));
     }
-    x += files_w + 6.0;
+    x += files_w + 8.0;
 
     let purge_w = 78.0;
     let purge_rect = Rect::from_min_size(pos2(x, btn_y), vec2(purge_w, btn_h));
@@ -276,7 +282,7 @@ pub fn card(
     {
         act = Some(Act::Purge(app.id));
     }
-    x += purge_w + 6.0;
+    x += purge_w + 8.0;
 
     let un_w = ((rect.right() - PAD) - x).max(52.0);
     let un_rect = Rect::from_min_size(pos2(x, btn_y), vec2(un_w, btn_h));
@@ -403,4 +409,23 @@ pub fn chip_line(ui: &mut Ui, ctx: &Ctx, labels: &[&str]) {
             widgets::chip(ui, l, ctx.palette.text_dim, ctx.palette.accent_soft);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_card_gets_taller_with_a_bigger_icon() {
+        assert_eq!(card_height(40.0), 144.0);
+        assert_eq!(card_height(96.0) - card_height(48.0), 48.0);
+    }
+
+    #[test]
+    fn chips_never_overflow_the_card() {
+        assert_eq!(chip_room(300.0, 100.0), 184.0);
+        assert_eq!(chip_room(300.0, 290.0), 0.0);
+        // A caller that already overran gets no room rather than a negative one.
+        assert_eq!(chip_room(300.0, 400.0), 0.0);
+    }
 }

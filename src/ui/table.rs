@@ -41,9 +41,14 @@ impl Cols {
     }
 }
 
+/// Action pills shrink with the row but never below a usable 24 point target.
+pub fn action_h(row_h: f32) -> f32 {
+    (row_h - 10.0).clamp(24.0, 30.0)
+}
+
 pub fn row_height(d: Density) -> f32 {
     match d {
-        Density::Compact => 32.0,
+        Density::Compact => 34.0,
         Density::Normal => 42.0,
         Density::Relaxed => 54.0,
     }
@@ -73,25 +78,34 @@ pub fn header(
     let _cy = rect.center().y;
 
     let mut x = rect.left();
-    let mut col = |ui: &Ui, w: f32, label: &str| {
+    // Numeric columns are right-aligned like their cells, so the digits line up.
+    let mut col = |ui: &Ui, w: f32, label: &str, align: Align2| {
         if w <= 0.0 {
             x += w;
             return;
         }
         let r = Rect::from_min_max(pos2(x, rect.top()), pos2(x + w, rect.bottom()));
         if !label.is_empty() {
-            widgets::bidi_line(ui, r.shrink2(vec2(10.0, 0.0)), label, font.clone(), color);
+            // Header labels are static English text, so one run is enough.
+            widgets::text_fit(
+                ui,
+                r.shrink2(vec2(10.0, 0.0)),
+                label,
+                font.clone(),
+                color,
+                align,
+            );
         }
         x += w;
     };
 
-    col(ui, c.name_w, sort_label);
-    col(ui, c.publisher_w, "Publisher");
-    col(ui, c.version_w, "Version");
-    col(ui, c.size_w, "Size");
-    col(ui, c.date_w, "Installed");
-    col(ui, c.source_w, "Source");
-    col(ui, c.actions_w, "Actions");
+    col(ui, c.name_w, sort_label, Align2::LEFT_CENTER);
+    col(ui, c.publisher_w, "Publisher", Align2::LEFT_CENTER);
+    col(ui, c.version_w, "Version", Align2::LEFT_CENTER);
+    col(ui, c.size_w, "Size", Align2::RIGHT_CENTER);
+    col(ui, c.date_w, "Installed", Align2::RIGHT_CENTER);
+    col(ui, c.source_w, "Source", Align2::LEFT_CENTER);
+    col(ui, c.actions_w, "Actions", Align2::LEFT_CENTER);
 
     // Clickable zones for sorting.
     let mut zone_x = rect.left();
@@ -194,7 +208,7 @@ pub fn row(
             act = Some(Act::Details(app.id));
         }
         let star_rect =
-            Rect::from_min_size(pos2(icon_rect.right() + 4.0, cy - 11.0), vec2(22.0, 22.0));
+            Rect::from_min_size(pos2(icon_rect.right() + 4.0, cy - 12.0), vec2(24.0, 24.0));
         if widgets::star(ui, ("tstar", app.id), star_rect, app.favorite, p).clicked() {
             act = Some(Act::Favorite(app.id));
         }
@@ -261,7 +275,7 @@ pub fn row(
         x += c.name_w;
     }
 
-    let mut cell = |ui: &Ui, w: f32, text: &str, font: FontId, color: Color32| {
+    let mut cell = |ui: &Ui, w: f32, text: &str, font: FontId, color: Color32, align: Align2| {
         if w <= 0.0 {
             x += w;
             return;
@@ -274,7 +288,7 @@ pub fn row(
                 text,
                 font.clone(),
                 color,
-                Align2::LEFT_CENTER,
+                align,
             );
         }
         x += w;
@@ -286,6 +300,7 @@ pub fn row(
         &app.publisher,
         FontId::proportional(theme::T_BODY),
         p.text_dim,
+        Align2::LEFT_CENTER,
     );
     cell(
         ui,
@@ -293,6 +308,7 @@ pub fn row(
         &app.version,
         FontId::proportional(theme::T_BODY),
         p.text_dim,
+        Align2::LEFT_CENTER,
     );
     cell(
         ui,
@@ -300,6 +316,7 @@ pub fn row(
         &human_size(app.size_bytes),
         FontId::proportional(theme::T_BODY),
         p.text_dim,
+        Align2::RIGHT_CENTER,
     );
     cell(
         ui,
@@ -307,6 +324,7 @@ pub fn row(
         &app.install_date,
         FontId::proportional(theme::T_BODY),
         p.text_faint,
+        Align2::RIGHT_CENTER,
     );
 
     // source chip
@@ -329,7 +347,8 @@ pub fn row(
             pos2(r.left() + 10.0 + w * 0.5, cy),
             vec2(w, galley.size().y + 6.0),
         );
-        ui.painter().rect_filled(chip, 6, bg);
+        ui.painter()
+            .rect_filled(chip, CornerRadius::same(theme::R_XS), bg);
         ui.painter()
             .galley(chip.center() - galley.size() * 0.5, galley, fg);
         x += c.source_w;
@@ -338,7 +357,7 @@ pub fn row(
     // action buttons
     {
         let r = Rect::from_min_max(pos2(x, rect.top()), pos2(x + c.actions_w, rect.bottom()));
-        let bh = (h - 12.0).clamp(20.0, 28.0);
+        let bh = action_h(h);
         let by = cy - bh * 0.5;
         let mut bx = r.left() + 8.0;
 
@@ -486,4 +505,27 @@ pub fn body(
             }
         });
     act
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_density_keeps_a_usable_target() {
+        for d in [Density::Compact, Density::Normal, Density::Relaxed] {
+            let h = row_height(d);
+            assert!(h >= 34.0, "{:?} rows are {} high", d, h);
+            assert!(
+                action_h(h) >= 24.0,
+                "{:?} action pills are {} high",
+                d,
+                action_h(h)
+            );
+            assert!(action_h(h) <= 30.0);
+            assert!(action_h(h) < h, "a pill must fit inside its row");
+        }
+        assert!(row_height(Density::Compact) < row_height(Density::Normal));
+        assert!(row_height(Density::Normal) < row_height(Density::Relaxed));
+    }
 }

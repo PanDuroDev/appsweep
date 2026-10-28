@@ -249,6 +249,8 @@ pub fn apply(ctx: &egui::Context, mode: ThemeMode, accent: Accent, density: Dens
     style.visuals = visuals;
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
     style.spacing.button_padding = egui::vec2(14.0, 8.0);
+    // The settings sliders sit in a narrow column next to their labels.
+    style.spacing.slider_width = 160.0;
     style.spacing.menu_margin = egui::Margin::same(8);
     style.spacing.indent = 16.0;
     style.spacing.scroll.bar_width = 9.0;

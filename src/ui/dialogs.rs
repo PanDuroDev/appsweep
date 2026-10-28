@@ -114,6 +114,21 @@ fn field(ui: &mut Ui, p: &Palette, label: &str, value: &str, mono: bool) {
     });
 }
 
+/// Settings row: a fixed label column so every control starts at the same x.
+fn row(ui: &mut Ui, p: &Palette, label: &str, add: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        ui.add_space(2.0);
+        ui.allocate_ui_with_layout(
+            vec2(90.0, 28.0),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.label(RichText::new(label).color(p.text_dim));
+            },
+        );
+        ui.with_layout(Layout::left_to_right(Align::Center), add);
+    });
+}
+
 fn section(ui: &mut Ui, p: &Palette, text: &str) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -865,85 +880,64 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             section(ui, p, "Appearance");
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(RichText::new("Mode").color(p.text_dim));
-                    for (m, l) in [(ThemeMode::Light, "Light"), (ThemeMode::Dark, "Dark")] {
-                        let sel = s.theme == m;
-                        if widgets::segment(ui, p, l, sel, 72.0).clicked() {
-                            s.theme = m;
-                            changed = true;
-                        }
+            row(ui, p, "Mode", |ui| {
+                for (m, l) in [(ThemeMode::Light, "Light"), (ThemeMode::Dark, "Dark")] {
+                    let sel = s.theme == m;
+                    if widgets::segment(ui, p, l, sel, 72.0).clicked() {
+                        s.theme = m;
+                        changed = true;
                     }
-                });
+                }
             });
 
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(RichText::new("Accent color").color(p.text_dim));
-                    for a in Accent::ALL {
-                        let (r, g, b) = a.rgb();
-                        let col = Color32::from_rgb(r, g, b);
-                        let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::click());
-                        ui.painter().circle_filled(rect.center(), 12.0, col);
-                        if s.accent == a {
-                            ui.painter().circle_stroke(
-                                rect.center(),
-                                14.5,
-                                Stroke::new(1.6, p.text),
-                            );
-                        }
-                        if resp.hovered() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                        if resp.clicked() {
-                            s.accent = a;
-                            changed = true;
-                        }
-                        resp.on_hover_text(a.label());
+            row(ui, p, "Accent color", |ui| {
+                for a in Accent::ALL {
+                    let (r, g, b) = a.rgb();
+                    let col = Color32::from_rgb(r, g, b);
+                    let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::click());
+                    ui.painter().circle_filled(rect.center(), 12.0, col);
+                    if s.accent == a {
+                        ui.painter()
+                            .circle_stroke(rect.center(), 14.5, Stroke::new(1.6, p.text));
                     }
-                });
+                    if resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if resp.clicked() {
+                        s.accent = a;
+                        changed = true;
+                    }
+                    resp.on_hover_text(a.label());
+                }
             });
 
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(RichText::new("Density").color(p.text_dim));
-                    for d in [Density::Compact, Density::Normal, Density::Relaxed] {
-                        let sel = s.density == d;
-                        if widgets::segment(ui, p, d.label(), sel, 64.0).clicked() {
-                            s.density = d;
-                            changed = true;
-                        }
+            row(ui, p, "Density", |ui| {
+                for d in [Density::Compact, Density::Normal, Density::Relaxed] {
+                    let sel = s.density == d;
+                    if widgets::segment(ui, p, d.label(), sel, 64.0).clicked() {
+                        s.density = d;
+                        changed = true;
                     }
-                });
+                }
             });
 
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(RichText::new("View").color(p.text_dim));
-                    for (v, l) in [(ViewMode::Cards, "Cards"), (ViewMode::Table, "Table")] {
-                        let sel = s.view == v;
-                        if widgets::segment(ui, p, l, sel, 72.0).clicked() {
-                            s.view = v;
-                            changed = true;
-                        }
+            row(ui, p, "View", |ui| {
+                for (v, l) in [(ViewMode::Cards, "Cards"), (ViewMode::Table, "Table")] {
+                    let sel = s.view == v;
+                    if widgets::segment(ui, p, l, sel, 72.0).clicked() {
+                        s.view = v;
+                        changed = true;
                     }
-                });
+                }
             });
 
             if s.view == ViewMode::Cards {
-                ui.horizontal(|ui| {
-                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                        ui.label(RichText::new("Card width").color(p.text_dim));
-                        ui.add(egui::Slider::new(&mut s.card_min_width, 220.0..=460.0));
-                    });
+                row(ui, p, "Card width", |ui| {
+                    ui.add(egui::Slider::new(&mut s.card_min_width, 220.0..=460.0));
                 });
             }
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(RichText::new("Icon size").color(p.text_dim));
-                    ui.add(egui::Slider::new(&mut s.icon_size, 28.0..=96.0));
-                });
+            row(ui, p, "Icon size", |ui| {
+                ui.add(egui::Slider::new(&mut s.icon_size, 28.0..=96.0));
             });
 
             section(ui, p, "Shown in the list");
@@ -997,27 +991,24 @@ pub fn settings(ui: &mut Ui, p: &Palette, s: &mut Settings) -> (Asked, bool) {
                     ui.checkbox(&mut s.scan_on_start, "Scan on startup");
                 });
             });
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(RichText::new("Sort by").color(p.text_dim));
-                    egui::ComboBox::from_id_salt("sortkey")
-                        .selected_text(s.sort.label())
-                        .width(150.0)
-                        .show_ui(ui, |ui| {
-                            for k in [
-                                SortKey::Name,
-                                SortKey::Publisher,
-                                SortKey::Size,
-                                SortKey::Date,
-                                SortKey::Source,
-                            ] {
-                                if ui.selectable_value(&mut s.sort, k, k.label()).clicked() {
-                                    changed = true;
-                                }
+            row(ui, p, "Sort by", |ui| {
+                egui::ComboBox::from_id_salt("sortkey")
+                    .selected_text(s.sort.label())
+                    .width(150.0)
+                    .show_ui(ui, |ui| {
+                        for k in [
+                            SortKey::Name,
+                            SortKey::Publisher,
+                            SortKey::Size,
+                            SortKey::Date,
+                            SortKey::Source,
+                        ] {
+                            if ui.selectable_value(&mut s.sort, k, k.label()).clicked() {
+                                changed = true;
                             }
-                        });
-                    ui.checkbox(&mut s.sort_desc, "Descending");
-                });
+                        }
+                    });
+                ui.checkbox(&mut s.sort_desc, "Descending");
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
