@@ -2447,7 +2447,7 @@ mod tests {
     fn deletion_guard_rejects_drive_and_unc_roots() {
         assert!(is_root_path(r"C:\"));
         assert!(is_root_path("C:"));
-        assert!(is_root_path("\\"));
+        assert!(is_root_path(r"\\"));
         assert!(is_root_path(r"\\server\share"));
         assert!(is_root_path(r"\\?\C:\"));
         assert!(is_root_path(r"\\?\UNC\server\share"));
