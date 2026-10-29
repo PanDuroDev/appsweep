@@ -1039,6 +1039,12 @@ impl Runner {
             }
             Op::BackupRegistry { root, key } => {
                 let _ = std::fs::create_dir_all(&self.backup_dir);
+                // One file per run: a second uninstall of the same app must not
+                // overwrite the snapshot taken before the first one.
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
                 let safe: String = self
                     .app
                     .name
@@ -1047,7 +1053,7 @@ impl Runner {
                     .collect();
                 let file = self
                     .backup_dir
-                    .join(format!("{}-{}.reg", safe, root.label()));
+                    .join(format!("{}-{}-{}.reg", safe, root.label(), stamp));
                 let full = match root {
                     RegRoot::Hklm => format!("HKLM\\{}", key),
                     RegRoot::Hklm32 => format!("HKLM\\{}", key),
@@ -1530,14 +1536,7 @@ pub fn list_backups() -> Vec<BackupEntry> {
                 .and_then(|m| m.modified().ok())
                 .map(format_time)
                 .unwrap_or_default();
-            // "<app>-<ROOT>.reg" -> ROOT
-            let root = name
-                .trim_end_matches(".reg")
-                .trim_end_matches(".REG")
-                .rsplit('-')
-                .next()
-                .unwrap_or("")
-                .to_string();
+            let root = backup_root_of(&name);
             out.push(BackupEntry {
                 group: group_name.clone(),
                 file: name,
@@ -1608,6 +1607,25 @@ pub fn clear_backups() -> Result<usize, String> {
         return Err(r.first_error);
     }
     Ok(n)
+}
+
+/// Registry root named by a backup file: `"<app>-<ROOT>.reg"` for the old
+/// names, `"<app>-<ROOT>-<seconds>.reg"` for the timestamped ones.
+fn backup_root_of(file: &str) -> String {
+    let stem = file
+        .strip_suffix(".reg")
+        .or_else(|| file.strip_suffix(".REG"))
+        .unwrap_or(file);
+    let parts: Vec<&str> = stem.rsplit('-').collect();
+    // A trailing all-digit part is the timestamp, not the root.
+    let root = match parts.as_slice() {
+        [last, ..] if last.chars().all(|c| c.is_ascii_digit()) && last.len() >= 9 => {
+            parts.get(1).copied().unwrap_or("")
+        }
+        [last, ..] => last,
+        [] => "",
+    };
+    root.to_string()
 }
 
 /// Total size of every saved backup, in bytes.
@@ -2152,6 +2170,28 @@ mod tests {
         for flow in [Flow::Uninstall, Flow::Purge, Flow::FilesOnly] {
             assert!(!flow.title().is_empty());
         }
+    }
+
+    #[test]
+    fn a_second_backup_does_not_overwrite_the_first() {
+        // The file name carries a timestamp, so the same app can keep one
+        // snapshot per uninstall attempt.
+        let a = "Demo-HKCU-1700000000.reg";
+        let b = "Demo-HKCU-1700000600.reg";
+        assert_ne!(a, b);
+        assert_eq!(backup_root_of(a), "HKCU");
+        assert_eq!(backup_root_of(b), "HKCU");
+        // The old, untimestamped names still parse.
+        assert_eq!(backup_root_of("Demo-HKCU.reg"), "HKCU");
+        assert_eq!(backup_root_of("Demo-HKLM32.REG"), "HKLM32");
+    }
+
+    #[test]
+    fn apps_whose_names_sanitize_alike_land_in_different_folders() {
+        // "A/B" and "A:B" both become "A_B" for the file name, but the folder
+        // is what separates them in the backup manager.
+        assert_eq!(backup_root_of("A_B-HKCU-1700000000.reg"), "HKCU");
+        assert_eq!(backup_root_of("no-root-suffix.reg"), "suffix");
     }
 
     #[test]
