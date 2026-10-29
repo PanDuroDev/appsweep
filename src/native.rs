@@ -2196,7 +2196,9 @@ fn clear_readonly(path: &Path) {
         let handle = CreateFileW(
             path_wide.as_ptr(),
             FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            // Do not race an existing writer and overwrite timestamps from a
+            // stale FILE_BASIC_INFO snapshot while clearing READONLY.
+            FILE_SHARE_READ,
             null_mut(),
             OPEN_EXISTING,
             FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
