@@ -473,8 +473,8 @@ fn safe_paths(paths: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-fn cleanup_blocked_by_task_discovery(flow: Flow, tasks_unknown: bool) -> bool {
-    tasks_unknown && matches!(flow, Flow::Uninstall | Flow::Purge)
+fn cleanup_blocked_by_resource_discovery(flow: Flow, inventory_unknown: bool) -> bool {
+    inventory_unknown && matches!(flow, Flow::Uninstall | Flow::Purge)
 }
 
 pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bool) -> Vec<Step> {
@@ -545,11 +545,27 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
     // Services, scheduled tasks and shortcuts that live in the app folder are
     // part of what Uninstall and Purge both have to remove - and what Verify
     // has to check afterwards, so they are discovered once, up front.
+    let mut services_unknown = false;
     let svc_names: Vec<String> = if flow == Flow::FilesOnly {
         Vec::new()
     } else {
         match &dir {
-            Some(d) => crate::native::services_under(&s(d)),
+            Some(d) => match crate::native::services_under(&s(d)) {
+                Some(found) => found,
+                None => {
+                    services_unknown = true;
+                    add(
+                        "List installed services",
+                        "The service list could not be read - services may remain",
+                        Op::Note {
+                            message: "Services could not be listed".into(),
+                        },
+                        false,
+                        true,
+                    );
+                    Vec::new()
+                }
+            },
             None => Vec::new(),
         }
     };
@@ -585,13 +601,13 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
     // A purge/uninstall that cannot enumerate scheduled tasks could leave a
     // startup task pointing at the folder we are about to remove. Do not run
     // any partial cleanup unless task discovery was complete.
-    if cleanup_blocked_by_task_discovery(flow, tasks_unknown) {
+    if cleanup_blocked_by_resource_discovery(flow, tasks_unknown || services_unknown) {
         return vec![Step {
             title: "Cleanup cancelled".into(),
-            detail: "Scheduled tasks could not be enumerated, so no changes were made.".into(),
+            detail: "Services or scheduled tasks could not be enumerated, so no changes were made.".into(),
             status: StepStatus::Pending,
             op: Op::Note {
-                message: "Cleanup cancelled because scheduled-task discovery failed".into(),
+                message: "Cleanup cancelled because service/task discovery failed".into(),
             },
             skip_if_gone: false,
             optional: false,
@@ -2304,10 +2320,10 @@ mod tests {
 
     #[test]
     fn incomplete_task_discovery_blocks_destructive_flows() {
-        assert!(cleanup_blocked_by_task_discovery(Flow::Uninstall, true));
-        assert!(cleanup_blocked_by_task_discovery(Flow::Purge, true));
-        assert!(!cleanup_blocked_by_task_discovery(Flow::FilesOnly, true));
-        assert!(!cleanup_blocked_by_task_discovery(Flow::Purge, false));
+        assert!(cleanup_blocked_by_resource_discovery(Flow::Uninstall, true));
+        assert!(cleanup_blocked_by_resource_discovery(Flow::Purge, true));
+        assert!(!cleanup_blocked_by_resource_discovery(Flow::FilesOnly, true));
+        assert!(!cleanup_blocked_by_resource_discovery(Flow::Purge, false));
     }
 
     #[test]
