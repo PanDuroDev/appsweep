@@ -66,6 +66,11 @@ const FOF_NOCONFIRMATION: u16 = 0x0010;
 const FOF_ALLOWUNDO: u16 = 0x0040;
 const FOF_NOERRORUI: u16 = 0x0400;
 const SHGFI_ICON: u32 = 0x0000_0100;
+const SHGFI_SYSICONINDEX: u32 = 0x0000_4000;
+const SHIL_LARGE: i32 = 0;
+const SHIL_EXTRALARGE: i32 = 2;
+const SHIL_JUMBO: i32 = 4;
+const ILD_TRANSPARENT: u32 = 0x0001;
 const SHGFI_USEFILEATTRIBUTES: u32 = 0x0000_0010;
 const SHGFI_LARGEICON: u32 = 0x0000_0000;
 const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
@@ -403,6 +408,11 @@ struct ShellLinkVTable {
 }
 
 #[repr(C)]
+struct ImageListVTable {
+    methods: [usize; 32],
+}
+
+#[repr(C)]
 struct PersistFileVTable {
     methods: [usize; 9],
 }
@@ -583,6 +593,7 @@ extern "system" {
         file_info_size: u32,
         flags: u32,
     ) -> usize;
+    fn SHGetImageList(image_list: i32, interface_id: *const Guid, result: *mut *mut c_void) -> HResult;
     fn ExtractIconExW(
         file_name: *const u16,
         icon_index: i32,
@@ -871,15 +882,53 @@ pub fn extract_icon(path: &str, size: u32) -> Option<RawIcon> {
 
     unsafe {
         let mut info: ShellFileInfoW = zeroed();
-        let found = SHGetFileInfoW(
+        let have_index = SHGetFileInfoW(
             wide_path.as_ptr(),
             0,
             &mut info,
             size_of::<ShellFileInfoW>() as u32,
-            SHGFI_ICON | SHGFI_LARGEICON,
+            SHGFI_SYSICONINDEX | SHGFI_LARGEICON,
         ) != 0;
-        if found && !info.h_icon.is_null() {
-            icon = info.h_icon;
+        if have_index {
+            let image_list_kind = if requested >= 200 {
+                SHIL_JUMBO
+            } else if requested >= 40 {
+                SHIL_EXTRALARGE
+            } else {
+                SHIL_LARGE
+            };
+            let mut image_list = null_mut();
+            let result = SHGetImageList(image_list_kind, &IID_IMAGE_LIST, &mut image_list);
+            if result >= 0 && !image_list.is_null() {
+                let vtable = *(image_list as *mut *const ImageListVTable);
+                let get_icon: unsafe extern "system" fn(
+                    *mut c_void,
+                    i32,
+                    u32,
+                    *mut Handle,
+                ) -> HResult = transmute((*vtable).methods[10]);
+                let _ = get_icon(
+                    image_list,
+                    info.i_icon,
+                    ILD_TRANSPARENT,
+                    &mut icon,
+                );
+                release_com_object(image_list);
+            }
+        }
+
+        if icon.is_null() {
+            let mut fallback: ShellFileInfoW = zeroed();
+            let found = SHGetFileInfoW(
+                wide_path.as_ptr(),
+                0,
+                &mut fallback,
+                size_of::<ShellFileInfoW>() as u32,
+                SHGFI_ICON | SHGFI_LARGEICON,
+            ) != 0;
+            if found {
+                icon = fallback.h_icon;
+            }
         }
 
         if icon.is_null() {
@@ -1308,6 +1357,12 @@ const IID_PERSIST_FILE: Guid = Guid {
     data2: 0,
     data3: 0,
     data4: [0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
+};
+const IID_IMAGE_LIST: Guid = Guid {
+    data1: 0x46eb_5926,
+    data2: 0x582e,
+    data3: 0x4017,
+    data4: [0x9f, 0xdf, 0xe8, 0x99, 0x8d, 0xaa, 0x09, 0x50],
 };
 
 unsafe fn release_com_object(object: *mut c_void) {
@@ -1836,7 +1891,7 @@ fn take_ownership(path: &Path) -> bool {
     let Some(admins_sid) = allocate_admins_sid() else {
         return false;
     };
-    let mut entry = ExplicitAccessW {
+    let entry = ExplicitAccessW {
         access_permissions: DELETE_FILE_ACCESS
             | FILE_DELETE_CHILD
             | FILE_GENERIC_READ
