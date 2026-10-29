@@ -3,8 +3,8 @@
 
 use std::ffi::{c_char, c_void};
 use std::mem::{size_of, transmute, zeroed};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::Path;
+use std::process::Command;
 use std::ptr::{null, null_mut};
 
 #[cfg(windows)]
@@ -27,6 +27,30 @@ const STARTF_USESTDHANDLES: u32 = 0x0000_0100;
 const SW_HIDE: u16 = 0;
 const SW_SHOWNORMAL: i32 = 1;
 const TOKEN_QUERY: u32 = 0x0008;
+const TOKEN_ADJUST_PRIVILEGES: u32 = 0x0020;
+const SE_PRIVILEGE_ENABLED: u32 = 0x0002;
+const ERROR_NOT_ALL_ASSIGNED: u32 = 1300;
+const SE_FILE_OBJECT: u32 = 1;
+const OWNER_SECURITY_INFORMATION: u32 = 0x0001;
+const GROUP_SECURITY_INFORMATION: u32 = 0x0002;
+const DACL_SECURITY_INFORMATION: u32 = 0x0004;
+const PROTECTED_DACL_SECURITY_INFORMATION: u32 = 0x8000_0000;
+const SET_ACCESS: u32 = 2;
+const TRUSTEE_IS_SID: u32 = 0;
+const TRUSTEE_IS_USER: u32 = 1;
+const TRUSTEE_IS_GROUP: u32 = 2;
+const TRUSTEE_IS_WELL_KNOWN_GROUP: u32 = 5;
+const NO_INHERITANCE: u32 = 0;
+const DELETE_FILE_ACCESS: u32 = 0x0001_0000;
+const FILE_DELETE_CHILD: u32 = 0x0000_0040;
+const FILE_GENERIC_READ: u32 = 0x0012_0089;
+const FILE_GENERIC_WRITE: u32 = 0x0012_0116;
+const READ_CONTROL: u32 = 0x0002_0000;
+const SYNCHRONIZE: u32 = 0x0010_0000;
+const FILE_ALL_ACCESS: u32 = 0x001f_01ff;
+const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x20;
+const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x220;
 const TOKEN_USER_CLASS: u32 = 1;
 const TOKEN_ELEVATION_CLASS: u32 = 20;
 const HANDLE_FLAG_INHERIT: u32 = 1;
@@ -76,6 +100,85 @@ struct SecurityAttributes {
     length: u32,
     security_descriptor: *mut c_void,
     inherit_handle: Bool,
+}
+
+#[repr(C)]
+struct Luid {
+    low_part: u32,
+    high_part: i32,
+}
+
+#[repr(C)]
+struct LuidAndAttributes {
+    luid: Luid,
+    attributes: u32,
+}
+
+#[repr(C)]
+struct TokenPrivileges {
+    privilege_count: u32,
+    privileges: [LuidAndAttributes; 1],
+}
+
+#[repr(C)]
+struct SidIdentifierAuthority {
+    value: [u8; 6],
+}
+
+#[repr(C)]
+struct AclHeader {
+    revision: u8,
+    sbz1: u8,
+    size: u16,
+    ace_count: u16,
+    sbz2: u16,
+}
+
+#[repr(C)]
+struct AceHeader {
+    ace_type: u8,
+    ace_flags: u8,
+    ace_size: u16,
+}
+
+#[repr(C)]
+struct AccessAllowedAce {
+    header: AceHeader,
+    mask: u32,
+    sid_start: u32,
+}
+
+#[repr(C)]
+struct TrusteeW {
+    multiple_trustee: *mut c_void,
+    multiple_trustee_operation: u32,
+    trustee_form: u32,
+    trustee_type: u32,
+    name: *mut u16,
+}
+
+#[repr(C)]
+struct ExplicitAccessW {
+    access_permissions: u32,
+    access_mode: u32,
+    inheritance: u32,
+    trustee: TrusteeW,
+}
+
+struct SavedSecurity {
+    descriptor: *mut c_void,
+    owner: *mut c_void,
+    group: *mut c_void,
+}
+
+impl Drop for SavedSecurity {
+    fn drop(&mut self) {
+        if !self.descriptor.is_null() {
+            unsafe {
+                let _ = LocalFree(self.descriptor);
+            }
+        }
+    }
 }
 
 #[repr(C)]
@@ -378,6 +481,63 @@ extern "system" {
         return_length: *mut u32,
     ) -> Bool;
     fn ConvertSidToStringSidW(sid: *mut c_void, string_sid: *mut *mut u16) -> Bool;
+    fn LookupPrivilegeValueW(system_name: *const u16, name: *const u16, luid: *mut Luid) -> Bool;
+    fn AdjustTokenPrivileges(
+        token: Handle,
+        disable_all: Bool,
+        new_state: *mut TokenPrivileges,
+        buffer_length: u32,
+        previous_state: *mut TokenPrivileges,
+        return_length: *mut u32,
+    ) -> Bool;
+    fn AllocateAndInitializeSid(
+        authority: *const SidIdentifierAuthority,
+        sub_authority_count: u8,
+        sub0: u32,
+        sub1: u32,
+        sub2: u32,
+        sub3: u32,
+        sub4: u32,
+        sub5: u32,
+        sub6: u32,
+        sub7: u32,
+        sid: *mut *mut c_void,
+    ) -> Bool;
+    fn FreeSid(sid: *mut c_void) -> *mut c_void;
+    fn CheckTokenMembership(token: Handle, sid: *mut c_void, is_member: *mut Bool) -> Bool;
+    fn GetNamedSecurityInfoW(
+        object_name: *mut u16,
+        object_type: u32,
+        security_info: u32,
+        owner: *mut *mut c_void,
+        group: *mut *mut c_void,
+        dacl: *mut *mut c_void,
+        sacl: *mut *mut c_void,
+        security_descriptor: *mut *mut c_void,
+    ) -> u32;
+    fn SetNamedSecurityInfoW(
+        object_name: *mut u16,
+        object_type: u32,
+        security_info: u32,
+        owner: *mut c_void,
+        group: *mut c_void,
+        dacl: *mut c_void,
+        sacl: *mut c_void,
+    ) -> u32;
+    fn GetSecurityDescriptorDacl(
+        security_descriptor: *mut c_void,
+        dacl_present: *mut Bool,
+        dacl: *mut *mut c_void,
+        dacl_defaulted: *mut Bool,
+    ) -> Bool;
+    fn SetEntriesInAclW(
+        count: u32,
+        entries: *const ExplicitAccessW,
+        old_acl: *mut c_void,
+        new_acl: *mut *mut c_void,
+    ) -> u32;
+    fn GetAce(acl: *mut c_void, index: u32, ace: *mut *mut c_void) -> Bool;
+    fn EqualSid(first_sid: *mut c_void, second_sid: *mut c_void) -> Bool;
     fn OpenSCManagerW(machine_name: *const u16, database_name: *const u16, desired_access: u32) -> Handle;
     fn EnumServicesStatusExW(
         manager: Handle,
@@ -1494,97 +1654,246 @@ fn is_directory_reparse_point(path: &Path) -> bool {
         && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0
 }
 
-fn powershell_base64(script: &str) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut utf16 = Vec::with_capacity(script.len() * 2);
-    for unit in script.encode_utf16() {
-        utf16.extend_from_slice(&unit.to_le_bytes());
-    }
-    let mut encoded = String::with_capacity(utf16.len().div_ceil(3) * 4);
-    let mut index = 0usize;
-    while index < utf16.len() {
-        let a = utf16[index];
-        let b = utf16.get(index + 1).copied();
-        let c = utf16.get(index + 2).copied();
-        encoded.push(TABLE[(a >> 2) as usize] as char);
-        encoded.push(TABLE[(((a & 0x03) << 4) | (b.unwrap_or(0) >> 4)) as usize] as char);
-        match b {
-            Some(b) => encoded.push(TABLE[(((b & 0x0f) << 2) | (c.unwrap_or(0) >> 6)) as usize] as char),
-            None => encoded.push('='),
+fn enable_privilege(name: &str) -> bool {
+    let process = unsafe { GetCurrentProcess() };
+    let mut token = null_mut();
+    unsafe {
+        if OpenProcessToken(
+            process,
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            &mut token,
+        ) == 0
+        {
+            return false;
         }
-        match c {
-            Some(c) => encoded.push(TABLE[(c & 0x3f) as usize] as char),
-            None => encoded.push('='),
-        }
-        index += 3;
     }
-    encoded
+
+    let privilege_name = wide(name);
+    let mut luid = Luid {
+        low_part: 0,
+        high_part: 0,
+    };
+    let looked_up = unsafe {
+        LookupPrivilegeValueW(null(), privilege_name.as_ptr(), &mut luid) != 0
+    };
+    if !looked_up {
+        unsafe {
+            let _ = CloseHandle(token);
+        }
+        return false;
+    }
+
+    let mut privileges = TokenPrivileges {
+        privilege_count: 1,
+        privileges: [LuidAndAttributes {
+            luid,
+            attributes: SE_PRIVILEGE_ENABLED,
+        }],
+    };
+    let adjusted = unsafe {
+        AdjustTokenPrivileges(
+            token,
+            0,
+            &mut privileges,
+            size_of::<TokenPrivileges>() as u32,
+            null_mut(),
+            null_mut(),
+        ) != 0
+    };
+    let error = unsafe { GetLastError() };
+    unsafe {
+        let _ = CloseHandle(token);
+    }
+    adjusted && error != ERROR_NOT_ALL_ASSIGNED
 }
 
-fn ps_literal(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
-fn run_powershell(script: &str) -> Result<Output, String> {
-    let encoded = powershell_base64(script);
-    Command::new("powershell.exe")
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-EncodedCommand",
-            &encoded,
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|error| error.to_string())
-}
-
-fn acl_snapshot_and_relax(path: &Path) -> Option<PathBuf> {
-    let snapshot = std::env::temp_dir().join(format!(
-        "appsweep-acl-{}-{}.sddl",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default()
-    ));
-    let p = ps_literal(&path.to_string_lossy());
-    let s = ps_literal(&snapshot.to_string_lossy());
-    let script = format!(
-        "$ErrorActionPreference='Stop'; $p={p}; $s={s}; try {{ \
-         $acl=Get-Acl -LiteralPath $p; \
-         [IO.File]::WriteAllText($s,$acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::All),[Text.Encoding]::Unicode); \
-         & takeown.exe /F $p /A *> $null; if ($LASTEXITCODE -ne 0) {{ throw 'takeown failed' }}; \
-         & icacls.exe $p /inheritance:r /grant:r '*S-1-5-32-544:F' *> $null; if ($LASTEXITCODE -ne 0) {{ throw 'icacls failed' }}; \
-         exit 0 }} catch {{ if (Test-Path -LiteralPath $s) {{ try {{ $acl=Get-Acl -LiteralPath $p; $sddl=[IO.File]::ReadAllText($s,[Text.Encoding]::Unicode); $acl.SetSecurityDescriptorSddlForm($sddl,[Security.AccessControl.AccessControlSections]::All); Set-Acl -LiteralPath $p -AclObject $acl }} catch {{}} }}; exit 1 }}"
-    );
-    let result = run_powershell(&script).ok()?;
-    if result.status.success() && snapshot.exists() {
-        Some(snapshot)
+fn allocate_admins_sid() -> Option<*mut c_void> {
+    let nt_authority = SidIdentifierAuthority {
+        value: [0, 0, 0, 0, 0, 5],
+    };
+    let mut sid = null_mut();
+    let allocated = unsafe {
+        AllocateAndInitializeSid(
+            &nt_authority,
+            2,
+            SECURITY_BUILTIN_DOMAIN_RID,
+            DOMAIN_ALIAS_RID_ADMINS,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            &mut sid,
+        )
+    };
+    if allocated != 0 && !sid.is_null() {
+        Some(sid)
     } else {
-        let _ = std::fs::remove_file(snapshot);
         None
     }
 }
 
-fn restore_acl_snapshot(path: &Path, snapshot: &Path) {
-    if path.exists() {
-        let p = ps_literal(&path.to_string_lossy());
-        let s = ps_literal(&snapshot.to_string_lossy());
-        let script = format!(
-            "$ErrorActionPreference='Stop'; $p={p}; $s={s}; \
-             if ((Test-Path -LiteralPath $p) -and (Test-Path -LiteralPath $s)) {{ \
-             $acl=Get-Acl -LiteralPath $p; $sddl=[IO.File]::ReadAllText($s,[Text.Encoding]::Unicode); \
-             $acl.SetSecurityDescriptorSddlForm($sddl,[Security.AccessControl.AccessControlSections]::All); \
-             Set-Acl -LiteralPath $p -AclObject $acl }}"
-        );
-        let _ = run_powershell(&script);
+fn save_security(path: &Path) -> Option<SavedSecurity> {
+    let path_wide = wide(&long_path(&path.to_string_lossy()));
+    let mut owner = null_mut();
+    let mut group = null_mut();
+    let mut dacl = null_mut();
+    let mut descriptor = null_mut();
+    let result = unsafe {
+        GetNamedSecurityInfoW(
+            path_wide.as_ptr() as *mut u16,
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut owner,
+            &mut group,
+            &mut dacl,
+            null_mut(),
+            &mut descriptor,
+        )
+    };
+    if result == 0 && !descriptor.is_null() {
+        Some(SavedSecurity {
+            descriptor,
+            owner,
+            group,
+        })
+    } else {
+        if !descriptor.is_null() {
+            unsafe {
+                let _ = LocalFree(descriptor);
+            }
+        }
+        None
     }
-    let _ = std::fs::remove_file(snapshot);
 }
+
+fn restore_security(path: &Path, saved: &SavedSecurity) -> bool {
+    if saved.descriptor.is_null() {
+        return false;
+    }
+    let mut present = 0;
+    let mut defaulted = 0;
+    let mut dacl = null_mut();
+    if unsafe {
+        GetSecurityDescriptorDacl(saved.descriptor, &mut present, &mut dacl, &mut defaulted)
+    } == 0
+    {
+        return false;
+    }
+    let path_wide = wide(&long_path(&path.to_string_lossy()));
+    let security_info = OWNER_SECURITY_INFORMATION
+        | GROUP_SECURITY_INFORMATION
+        | if present != 0 { DACL_SECURITY_INFORMATION } else { 0 };
+    unsafe {
+        SetNamedSecurityInfoW(
+            path_wide.as_ptr() as *mut u16,
+            SE_FILE_OBJECT,
+            security_info,
+            saved.owner,
+            saved.group,
+            if present != 0 { dacl } else { null_mut() },
+            null_mut(),
+        ) == 0
+    }
+}
+
+fn take_ownership(path: &Path) -> bool {
+    let _ = enable_privilege("SeTakeOwnershipPrivilege");
+    let _ = enable_privilege("SeRestorePrivilege");
+    let _ = enable_privilege("SeBackupPrivilege");
+
+    let Some(owners_sid) = allocate_admins_sid() else {
+        return false;
+    };
+    let path_wide = wide(&long_path(&path.to_string_lossy()));
+    unsafe {
+        let _ = SetNamedSecurityInfoW(
+            path_wide.as_ptr() as *mut u16,
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            owners_sid,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+        );
+        let _ = FreeSid(owners_sid);
+    }
+
+    let Some(membership_sid) = allocate_admins_sid() else {
+        return false;
+    };
+    let mut is_admin = 0;
+    let membership_checked =
+        unsafe { CheckTokenMembership(null_mut(), membership_sid, &mut is_admin) != 0 };
+    unsafe {
+        let _ = FreeSid(membership_sid);
+    }
+    if !membership_checked || is_admin == 0 {
+        return false;
+    }
+
+    let Some(admins_sid) = allocate_admins_sid() else {
+        return false;
+    };
+    let mut entry = ExplicitAccessW {
+        access_permissions: DELETE_FILE_ACCESS
+            | FILE_DELETE_CHILD
+            | FILE_GENERIC_READ
+            | FILE_GENERIC_WRITE
+            | READ_CONTROL
+            | SYNCHRONIZE,
+        access_mode: SET_ACCESS,
+        inheritance: NO_INHERITANCE,
+        trustee: TrusteeW {
+            multiple_trustee: null_mut(),
+            multiple_trustee_operation: 0,
+            trustee_form: TRUSTEE_IS_SID,
+            trustee_type: TRUSTEE_IS_GROUP,
+            name: admins_sid as *mut u16,
+        },
+    };
+    let mut acl = null_mut();
+    let acl_result = unsafe { SetEntriesInAclW(1, &entry, null_mut(), &mut acl) };
+    let result = if acl_result == 0 && !acl.is_null() {
+        unsafe {
+            let result = SetNamedSecurityInfoW(
+                path_wide.as_ptr() as *mut u16,
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                acl,
+                null_mut(),
+            );
+            let _ = LocalFree(acl);
+            result == 0
+        }
+    } else {
+        false
+    };
+    unsafe {
+        let _ = FreeSid(admins_sid);
+    }
+    result
+}
+
+fn acl_snapshot_and_relax(path: &Path) -> Option<SavedSecurity> {
+    let saved = save_security(path)?;
+    if take_ownership(path) {
+        Some(saved)
+    } else {
+        let _ = restore_security(path, &saved);
+        None
+    }
+}
+
+fn restore_acl_snapshot(path: &Path, snapshot: &SavedSecurity) {
+    if path.exists() {
+        let _ = restore_security(path, snapshot);
+    }
+}
+
 
 fn remove_object(path: &Path) -> std::io::Result<()> {
     if is_directory_reparse_point(path) || path.is_dir() {
