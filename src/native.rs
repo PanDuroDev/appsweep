@@ -3338,11 +3338,7 @@ pub fn create_restore_point(description: &str) -> (i32, i64) {
         unsafe extern "system" fn(*mut RestorePointInfoW, *mut StateManagerStatus) -> Bool;
     unsafe {
         let library = wide("srclient.dll");
-        let module = LoadLibraryExW(
-            library.as_ptr(),
-            null_mut(),
-            LOAD_LIBRARY_SEARCH_SYSTEM32,
-        );
+        let module = LoadLibraryExW(library.as_ptr(), null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32);
         if module.is_null() {
             return (GetLastError() as i32, 0);
         }
@@ -3373,7 +3369,6 @@ pub fn create_restore_point(description: &str) -> (i32, i64) {
     }
 }
 
-
 /// End the System Restore change notification after the cleanup operation.
 /// The sequence returned by BEGIN_SYSTEM_CHANGE must be passed back here.
 pub fn end_restore_point(sequence_number: i64) -> i32 {
@@ -3388,11 +3383,7 @@ pub fn end_restore_point(sequence_number: i64) -> i32 {
         unsafe extern "system" fn(*mut RestorePointInfoW, *mut StateManagerStatus) -> Bool;
     unsafe {
         let library = wide("srclient.dll");
-        let module = LoadLibraryExW(
-            library.as_ptr(),
-            null_mut(),
-            LOAD_LIBRARY_SEARCH_SYSTEM32,
-        );
+        let module = LoadLibraryExW(library.as_ptr(), null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32);
         if module.is_null() {
             return GetLastError() as i32;
         }
@@ -3440,9 +3431,8 @@ pub fn delete_scheduled_task(name: &str) -> i32 {
 
 fn system_program_path(program: &str) -> Result<String, i32> {
     let mut system_dir = vec![0u16; 32_768];
-    let system_dir_len = unsafe {
-        GetSystemDirectoryW(system_dir.as_mut_ptr(), system_dir.len() as u32)
-    } as usize;
+    let system_dir_len =
+        unsafe { GetSystemDirectoryW(system_dir.as_mut_ptr(), system_dir.len() as u32) } as usize;
     if system_dir_len == 0 {
         return Err(unsafe { GetLastError() } as i32);
     }
