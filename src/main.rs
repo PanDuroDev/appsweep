@@ -74,7 +74,10 @@ fn main() {
     // Initialize process-wide COM security before eframe or any UI component
     // initializes COM. System Restore needs callbacks from Windows services.
     let settings = settings::Settings::load();
-    if settings.create_restore_point && !native::initialize_restore_point_com_security() {
+    // Settings can be changed while the UI is open, so initialize this before
+    // eframe initializes COM even when restore points are currently disabled.
+    let restore_com_security_ready = native::initialize_restore_point_com_security();
+    if settings.create_restore_point && !restore_com_security_ready {
         eprintln!("System Restore COM security initialization failed; restore-point creation will be reported as unavailable.");
     }
 
