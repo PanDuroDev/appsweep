@@ -1007,11 +1007,7 @@ fn run_elevated_plan(plan: &PurgePlan) -> Result<PurgeResult, String> {
         let _ = std::fs::remove_file(&plan_path);
         return Err("Could not determine the current user SID for elevation".into());
     }
-    let params = format!(
-        "{} --plan-user-sid \"{}\"" ,
-        params,
-        parent_user_sid
-    );
+    let params = format!("{} --plan-user-sid \"{}\"", params, parent_user_sid);
     let (rc, exit_code) =
         crate::native::run_elevated(&exe.to_string_lossy(), &params, None, true);
     if rc != 0 || exit_code != 0 {
