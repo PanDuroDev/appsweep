@@ -578,6 +578,22 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
     };
     let shortcuts: Vec<String> = app.shortcuts.iter().map(|p| s(p)).collect();
 
+    // A purge/uninstall that cannot enumerate scheduled tasks could leave a
+    // startup task pointing at the folder we are about to remove. Do not run
+    // any partial cleanup unless task discovery was complete.
+    if tasks_unknown && matches!(flow, Flow::Uninstall | Flow::Purge) {
+        return vec![Step {
+            title: "Cleanup cancelled".into(),
+            detail: "Scheduled tasks could not be enumerated, so no changes were made.".into(),
+            status: StepStatus::Pending,
+            op: Op::Note {
+                message: "Cleanup cancelled because scheduled-task discovery failed".into(),
+            },
+            skip_if_gone: false,
+            optional: false,
+        }];
+    }
+
     match flow {
         Flow::Uninstall => {
             if let Some(cmd) = &app.uninstall_string {
