@@ -1585,15 +1585,14 @@ fn capture_process_output(command_line: &str) -> Option<(Vec<u8>, u32)> {
                 };
                 if read_ok == 0 || received == 0 {
                     pipe_open = false;
-                } else {
-                    truncated = true;
-                }
-                if data.len() < OUTPUT_LIMIT {
+                } else if data.len() < OUTPUT_LIMIT {
                     let retain = (OUTPUT_LIMIT - data.len()).min(received as usize);
                     data.extend_from_slice(&chunk[..retain]);
                     if retain < received as usize {
                         truncated = true;
                     }
+                } else {
+                    truncated = true;
                 }
                 // Continue draining after the capture limit so a verbose child
                 // cannot block forever because its pipe buffer is full.
@@ -3408,7 +3407,7 @@ mod tests {
     fn task_discovery_rejects_blank_paths_and_matches_any_task_action() {
         assert_eq!(tasks_under("   "), None);
         let listing = "TaskName: \\Demo\\First\nTask To Run: C:\\Apps\\Foobar\\tool.exe\nTask To Run: C:\\Apps\\Foo\\tool.exe\n\n";
-        assert_eq!(parse_tasks(listing, r"C:\Apps\Foo"), vec![r"\\Demo\\First"]);
+        assert_eq!(parse_tasks(listing, r"C:\Apps\Foo"), vec![r"\Demo\First"]);
         assert!(parse_tasks(listing, "  ").is_empty());
     }
 
