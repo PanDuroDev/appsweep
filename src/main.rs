@@ -41,7 +41,10 @@ fn main() {
                     println!("  {}", t);
                 }
             }
-            None => println!("count: unknown (schtasks could not be read)"),
+            None => {
+                eprintln!("count: unknown (schtasks could not be read)");
+                std::process::exit(1);
+            },
         }
         return;
     }
