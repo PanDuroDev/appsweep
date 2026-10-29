@@ -278,7 +278,7 @@ fn long_path(path: &str) -> String {
 }
 
 fn normalize_path(path: &str) -> String {
-    let mut value = long_path(path).replace('/', "\\\\").to_lowercase();
+    let mut value = long_path(path).replace('/', "\\").to_lowercase();
     while value.ends_with('\\') && value.len() > 4 {
         value.pop();
     }
