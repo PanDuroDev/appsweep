@@ -2313,21 +2313,12 @@ pub fn create_restore_point(description: &str) -> i32 {
         info.event_type = 100; // BEGIN_SYSTEM_CHANGE
         info.restore_point_type = 0; // APPLICATION_INSTALL
         let mut status: StateManagerStatus = zeroed();
-        status.event_type = info.event_type;
-        status.restore_point_type = info.restore_point_type;
         for (index, unit) in description
             .encode_utf16()
             .take(info.description.len() - 1)
             .enumerate()
         {
             info.description[index] = unit;
-        }
-        if description.is_empty() {
-            let fallback = wide("AppSweep");
-            for (index, unit) in fallback.iter().take(info.description.len() - 1).enumerate() {
-                if *unit == 0 { break; }
-                info.description[index] = *unit;
-            }
         }
         let ok = restore(&mut info, &mut status) != 0;
         let error = if ok { 0 } else { GetLastError() as i32 };
