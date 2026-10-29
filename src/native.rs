@@ -765,7 +765,7 @@ pub fn windows_build() -> u32 {
         if module.is_null() {
             return 0;
         }
-        let proc = GetProcAddress(module, b"RtlGetVersion\0".as_ptr() as *const c_char);
+        let proc = GetProcAddress(module, c"RtlGetVersion".as_ptr());
         if proc.is_null() {
             return 0;
         }
@@ -2303,7 +2303,7 @@ pub fn create_restore_point(description: &str) -> i32 {
         if module.is_null() {
             return GetLastError() as i32;
         }
-        let symbol = GetProcAddress(module, b"SRSetRestorePointW\0".as_ptr() as *const c_char);
+        let symbol = GetProcAddress(module, c"SRSetRestorePointW".as_ptr());
         if symbol.is_null() {
             let _ = FreeLibrary(module);
             return 127; // ERROR_PROC_NOT_FOUND
