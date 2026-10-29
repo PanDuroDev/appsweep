@@ -1937,9 +1937,9 @@ fn acl_snapshot_and_relax(path: &Path) -> Option<SavedSecurity> {
 }
 
 fn restore_acl_snapshot(path: &Path, snapshot: &SavedSecurity) {
-    if path.exists() {
-        let _ = restore_security(path, snapshot);
-    }
+    // Do not gate restoration on Path::exists(): access-denied metadata can
+    // report false even while the object survives and its ACL must be restored.
+    let _ = restore_security(path, snapshot);
 }
 
 
