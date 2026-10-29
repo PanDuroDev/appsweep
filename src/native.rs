@@ -2045,38 +2045,158 @@ pub fn force_delete(path: &str) -> DeleteReport {
 /// Self-test helper: returns 1 when an allowed Everyone ACE grants full control,
 /// 0 when none is present, and -1 when the ACL could not be read.
 pub fn grants_everyone_full_control(path: &str) -> i32 {
-    let p = ps_literal(path);
-    let script = format!(
-        "$ErrorActionPreference='Stop'; $acl=Get-Acl -LiteralPath {p}; $sid='S-1-1-0'; \
-         $full=[int][IO.FileSystemRights]::FullControl; $found=$false; \
-         foreach ($rule in $acl.Access) {{ try {{ \
-         if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and \
-         $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $sid -and \
-         (([int]$rule.FileSystemRights -band $full) -eq $full)) {{ $found=$true }} \
-         }} catch {{}} }}; if ($found) {{ '1' }} else {{ '0' }}"
-    );
-    match run_powershell(&script) {
-        Ok(output) if output.status.success() => {
-            if String::from_utf8_lossy(&output.stdout).trim() == "1" { 1 } else { 0 }
-        }
-        _ => -1,
+    let world_authority = SidIdentifierAuthority {
+        value: [0, 0, 0, 0, 0, 1],
+    };
+    let mut everyone = null_mut();
+    let allocated = unsafe {
+        AllocateAndInitializeSid(
+            &world_authority,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            &mut everyone,
+        )
+    };
+    if allocated == 0 || everyone.is_null() {
+        return -1;
     }
+
+    let mut object_name = wide(&long_path(path));
+    let mut dacl = null_mut();
+    let mut descriptor = null_mut();
+    let result = unsafe {
+        GetNamedSecurityInfoW(
+            object_name.as_mut_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            &mut dacl,
+            null_mut(),
+            &mut descriptor,
+        )
+    };
+    if result != 0 {
+        unsafe {
+            let _ = FreeSid(everyone);
+            if !descriptor.is_null() {
+                let _ = LocalFree(descriptor);
+            }
+        }
+        return -1;
+    }
+
+    let mut present = 0;
+    let mut defaulted = 0;
+    let mut actual_dacl = null_mut();
+    let descriptor_valid = unsafe {
+        GetSecurityDescriptorDacl(
+            descriptor,
+            &mut present,
+            &mut actual_dacl,
+            &mut defaulted,
+        ) != 0
+    };
+    let mut verdict = 0;
+    if descriptor_valid && present != 0 && !actual_dacl.is_null() {
+        let header = unsafe { &*(actual_dacl as *const AclHeader) };
+        for index in 0..u32::from(header.ace_count) {
+            let mut ace = null_mut();
+            if unsafe { GetAce(actual_dacl, index, &mut ace) } == 0 || ace.is_null() {
+                continue;
+            }
+            let header = unsafe { &*(ace as *const AceHeader) };
+            if header.ace_type != ACCESS_ALLOWED_ACE_TYPE {
+                continue;
+            }
+            let allowed = unsafe { &*(ace as *const AccessAllowedAce) };
+            let ace_sid = std::ptr::addr_of!(allowed.sid_start) as *mut c_void;
+            if unsafe { EqualSid(ace_sid, everyone) } != 0
+                && (allowed.mask & FILE_ALL_ACCESS) == FILE_ALL_ACCESS
+            {
+                verdict = 1;
+                break;
+            }
+        }
+    }
+
+    unsafe {
+        let _ = LocalFree(descriptor);
+        let _ = FreeSid(everyone);
+    }
+    verdict
 }
 
 /// Self-test only: add an explicit, non-inheriting Everyone full-control ACE.
 pub fn grant_everyone_full_control(path: &str) -> i32 {
-    let p = ps_literal(path);
-    let script = format!(
-        "$ErrorActionPreference='Stop'; $p={p}; $acl=Get-Acl -LiteralPath $p; \
-         $sid=New-Object Security.Principal.SecurityIdentifier('S-1-1-0'); \
-         $rule=New-Object Security.AccessControl.FileSystemAccessRule($sid,[IO.FileSystemRights]::FullControl,[Security.AccessControl.InheritanceFlags]::None,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow); \
-         $acl.SetAccessRule($rule); Set-Acl -LiteralPath $p -AclObject $acl"
-    );
-    match run_powershell(&script) {
-        Ok(output) if output.status.success() => 0,
-        Ok(output) => output.status.code().unwrap_or(1),
-        Err(_) => 1,
+    let world_authority = SidIdentifierAuthority {
+        value: [0, 0, 0, 0, 0, 1],
+    };
+    let mut everyone = null_mut();
+    let allocated = unsafe {
+        AllocateAndInitializeSid(
+            &world_authority,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            &mut everyone,
+        )
+    };
+    if allocated == 0 || everyone.is_null() {
+        return unsafe { GetLastError() as i32 };
     }
+
+    let entry = ExplicitAccessW {
+        access_permissions: FILE_ALL_ACCESS,
+        access_mode: SET_ACCESS,
+        inheritance: NO_INHERITANCE,
+        trustee: TrusteeW {
+            multiple_trustee: null_mut(),
+            multiple_trustee_operation: 0,
+            trustee_form: TRUSTEE_IS_SID,
+            trustee_type: TRUSTEE_IS_WELL_KNOWN_GROUP,
+            name: everyone as *mut u16,
+        },
+    };
+    let mut acl = null_mut();
+    let acl_result = unsafe { SetEntriesInAclW(1, &entry, null_mut(), &mut acl) };
+    if acl_result != 0 || acl.is_null() {
+        unsafe {
+            let _ = FreeSid(everyone);
+        }
+        return acl_result as i32;
+    }
+
+    let mut object_name = wide(&long_path(path));
+    let result = unsafe {
+        SetNamedSecurityInfoW(
+            object_name.as_mut_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            acl,
+            null_mut(),
+        )
+    };
+    unsafe {
+        let _ = LocalFree(acl);
+        let _ = FreeSid(everyone);
+    }
+    result as i32
 }
 
 pub fn path_exists(path: &str) -> bool {
