@@ -3657,7 +3657,9 @@ fn parse_task_names(listing: &str) -> Option<Vec<String>> {
     let rows = parse_csv_rows(listing)?;
     let mut names = Vec::with_capacity(rows.len());
     for row in rows {
-        if row.len() < 2 || row[1].trim().is_empty() {
+        // /V emits TaskName plus the command-bearing columns used by the
+        // ownership parser. A short record is incomplete, not proof of absence.
+        if row.len() < 9 || row[1].trim().is_empty() {
             return None;
         }
         names.push(row[1].trim().to_string());
@@ -3723,15 +3725,17 @@ mod tests {
 
     #[test]
     fn task_name_inventory_is_exact_and_rejects_incomplete_rows() {
-        let listing = r#""localhost","\Demo\One","Next","Ready"
-"localhost","\Demo\Two, with comma","Next","Ready"
-"#;
-        let names = parse_task_names(listing).unwrap();
-        assert!(names
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case(r"\Demo\One")));
+        let listing = [
+            r#""localhost","\Demo\One","N/A","Ready","Interactive","N/A","0","User","C:\Demo\one.exe""#,
+            r#""localhost","\Demo\Two, with comma","N/A","Ready","Interactive","N/A","0","User","C:\Demo\two.exe""#,
+        ]
+        .join("\r\n");
+        let names = parse_task_names(&listing).unwrap();
+        assert!(names.iter().any(|name| name.eq_ignore_ascii_case(r"\Demo\One")));
         assert!(names.iter().any(|name| name == r"\Demo\Two, with comma"));
         assert_eq!(parse_task_names(""), None);
+        assert_eq!(parse_task_names(r#""host","incomplete""#), None);
+        assert_eq!(parse_task_names(r#""host","task","only","four""#), None);
         assert_eq!(parse_task_names(r#""host""#), None);
     }
 
