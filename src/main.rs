@@ -71,6 +71,13 @@ fn main() {
         return;
     }
 
+    // Initialize process-wide COM security before eframe or any UI component
+    // initializes COM. System Restore needs callbacks from Windows services.
+    let settings = settings::Settings::load();
+    if settings.create_restore_point && !native::initialize_restore_point_com_security() {
+        eprintln!("System Restore COM security initialization failed; restore-point creation will be reported as unavailable.");
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 820.0])
@@ -84,11 +91,10 @@ fn main() {
     let _ = eframe::run_native(
         "AppSweep",
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             theme::load_fonts(&cc.egui_ctx);
-            let s = settings::Settings::load();
-            theme::apply(&cc.egui_ctx, s.theme, s.accent, s.density);
-            Ok(Box::new(ui::AppSweep::new(cc, s)))
+            theme::apply(&cc.egui_ctx, settings.theme, settings.accent, settings.density);
+            Ok(Box::new(ui::AppSweep::new(cc, settings)))
         }),
     );
 }
