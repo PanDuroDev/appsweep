@@ -1587,9 +1587,7 @@ fn restore_acl_snapshot(path: &Path, snapshot: &Path) {
 }
 
 fn remove_object(path: &Path) -> std::io::Result<()> {
-    if is_directory_reparse_point(path) {
-        std::fs::remove_dir(path)
-    } else if path.is_dir() {
+    if is_directory_reparse_point(path) || path.is_dir() {
         std::fs::remove_dir(path)
     } else {
         std::fs::remove_file(path)
@@ -1634,15 +1632,14 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
         match std::fs::remove_dir(path) {
             Ok(()) => stats.deleted += 1,
             Err(_) => {
-                let snapshot = acl_snapshot_and_relax(path);
-                if snapshot.is_some() {
+                if let Some(snapshot) = acl_snapshot_and_relax(path) {
                     clear_readonly(path);
                     if std::fs::remove_dir(path).is_ok() {
                         stats.deleted += 1;
-                        let _ = std::fs::remove_file(snapshot.as_ref().unwrap());
+                        let _ = std::fs::remove_file(snapshot);
                         return;
                     }
-                    restore_acl_snapshot(path, snapshot.as_ref().unwrap());
+                    restore_acl_snapshot(path, &snapshot);
                 }
                 stats.failed += 1;
                 if stats.first_error.is_empty() {
@@ -1655,15 +1652,14 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
         match std::fs::remove_file(path) {
             Ok(()) => stats.deleted += 1,
             Err(_) => {
-                let snapshot = acl_snapshot_and_relax(path);
-                if snapshot.is_some() {
+                if let Some(snapshot) = acl_snapshot_and_relax(path) {
                     clear_readonly(path);
                     if std::fs::remove_file(path).is_ok() {
                         stats.deleted += 1;
-                        let _ = std::fs::remove_file(snapshot.as_ref().unwrap());
+                        let _ = std::fs::remove_file(snapshot);
                         return;
                     }
-                    restore_acl_snapshot(path, snapshot.as_ref().unwrap());
+                    restore_acl_snapshot(path, &snapshot);
                 }
                 stats.failed += 1;
                 if stats.first_error.is_empty() {
