@@ -3635,12 +3635,12 @@ mod tests {
 
     #[test]
     fn task_name_inventory_is_exact_and_rejects_incomplete_rows() {
-        let listing = r#""localhost","\\Demo\\One","Next","Ready"
-"localhost","\\Demo\\Two, with comma","Next","Ready"
+        let listing = r#""localhost","\Demo\One","Next","Ready"
+"localhost","\Demo\Two, with comma","Next","Ready"
 "#;
         let names = parse_task_names(listing).unwrap();
-        assert!(names.iter().any(|name| name.eq_ignore_ascii_case(r"\\Demo\\One")));
-        assert!(names.iter().any(|name| name == r"\\Demo\\Two, with comma"));
+        assert!(names.iter().any(|name| name.eq_ignore_ascii_case(r"\Demo\One")));
+        assert!(names.iter().any(|name| name == r"\Demo\Two, with comma"));
         assert_eq!(parse_task_names(""), None);
         assert_eq!(parse_task_names(r#""host""#), None);
     }
