@@ -8,10 +8,17 @@ pub fn is_protected_dir(dir: &std::path::Path) -> bool {
             .replace('/', "\\")
             .to_lowercase()
     };
-    let target = norm(&dir.to_string_lossy());
-    if target.is_empty() || target.starts_with(r"\\?\") || target.starts_with(r"\\.\") {
+    // Namespace markers must be detected before trailing separators are
+    // trimmed: a bare "\\?\" would otherwise reduce to "\\?" and slip past
+    // every guard below.
+    let raw = dir.to_string_lossy().replace('/', "\\").to_lowercase();
+    if raw.starts_with(r"\\?\") || raw.starts_with(r"\\.\") {
         // Extended/device namespaces are intentionally unsupported for app
         // cleanup: checking only their textual prefix can bypass guarded roots.
+        return true;
+    }
+    let target = raw.trim_end_matches('\\');
+    if target.is_empty() {
         return true;
     }
     // A drive root such as "c:" or "c:\".
@@ -333,6 +340,10 @@ mod tests {
 
     #[test]
     fn extended_and_device_namespace_paths_are_protected() {
+        // Exact markers survive trailing-separator trimming and must stay
+        // protected on their own, not only when they prefix a longer path.
+        assert!(is_protected_dir(std::path::Path::new(r"\\?\")));
+        assert!(is_protected_dir(std::path::Path::new(r"\\.\")));
         assert!(is_protected_dir(std::path::Path::new(r"\\?\C:\Windows")));
         assert!(is_protected_dir(std::path::Path::new(r"\\.\C:\Windows")));
         assert!(is_protected_dir(std::path::Path::new(

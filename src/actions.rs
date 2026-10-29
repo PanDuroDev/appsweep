@@ -393,6 +393,18 @@ fn reg_key_exists(root: RegRoot, path: &str) -> bool {
     reg_key_state(root, path).unwrap_or(true)
 }
 
+/// The elevated plan file stores roots as `RegRoot::label()` text. Unknown
+/// labels must be rejected: defaulting them to HKCU could delete an unrelated
+/// user key with the same subkey name.
+fn reg_root_from_label(label: &str) -> Option<RegRoot> {
+    match label {
+        l if l == RegRoot::Hklm.label() => Some(RegRoot::Hklm),
+        l if l == RegRoot::Hklm32.label() => Some(RegRoot::Hklm32),
+        l if l == RegRoot::Hkcu.label() => Some(RegRoot::Hkcu),
+        _ => None,
+    }
+}
+
 pub fn delete_reg_key(root: RegRoot, path: &str) -> Result<(), String> {
     use winreg::enums::*;
     use winreg::RegKey;
@@ -1168,10 +1180,13 @@ pub fn run_plan_file(path: &str, expected_user_sid: &str) -> i32 {
         }
     }
     for key in &plan.delete_reg {
-        let root = match key.0.as_str() {
-            "HKLM" => RegRoot::Hklm,
-            "HKLM-32" => RegRoot::Hklm32,
-            _ => RegRoot::Hkcu,
+        let Some(root) = reg_root_from_label(&key.0) else {
+            res.failed += 1;
+            res.log.push(format!(
+                "registry rejected: unknown root {} for {}",
+                key.0, key.1
+            ));
+            continue;
         };
         match delete_reg_key(root, &key.1) {
             Ok(_) => res.record_removed(format!("registry removed: {}", key.1)),
@@ -2395,6 +2410,33 @@ mod tests {
 
     fn any_op(steps: &[Step], f: impl Fn(&Op) -> bool) -> bool {
         steps.iter().any(|s| f(&s.op))
+    }
+
+    #[test]
+    fn namespace_marker_install_dirs_block_the_whole_plan() {
+        // The planner itself must reject these paths with an explicit block
+        // and plan no destructive step, whatever the predicate returns.
+        for dir in [r"\\?\", r"\\.\"] {
+            let a = app("Demo", dir);
+            let steps = build_plan_for_test(&a, Flow::Purge, &Settings::default(), false);
+            assert!(
+                steps.iter().any(|s| s.title == "Cleanup blocked"),
+                "{dir} must block the plan"
+            );
+            assert!(
+                !any_op(&steps, |o| !matches!(o, Op::Note { .. })),
+                "{dir} must not plan a destructive step"
+            );
+        }
+    }
+
+    #[test]
+    fn registry_root_labels_round_trip_and_unknown_labels_are_rejected() {
+        for root in [RegRoot::Hklm, RegRoot::Hklm32, RegRoot::Hkcu] {
+            assert_eq!(reg_root_from_label(root.label()), Some(root));
+        }
+        assert_eq!(reg_root_from_label("HKCU-64"), None);
+        assert_eq!(reg_root_from_label(""), None);
     }
 
     #[test]
