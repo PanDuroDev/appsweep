@@ -1948,11 +1948,11 @@ fn take_ownership(path: &Path) -> bool {
 }
 
 fn acl_snapshot_and_relax(path: &Path) -> Option<SavedSecurity> {
-    let saved = save_security(path)?;
-    // Match the original cleanup flow: always attempt the second delete after
-    // the ownership/ACL attempt, then restore the snapshot only if it fails.
+    let saved = save_security(path);
+    // The original attempts the ownership/ACL change even when saving the
+    // descriptor fails. It restores the descriptor only when one was captured.
     let _ = take_ownership(path);
-    Some(saved)
+    saved
 }
 
 fn restore_acl_snapshot(path: &Path, snapshot: &SavedSecurity) {
