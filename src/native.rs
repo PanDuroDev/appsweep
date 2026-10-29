@@ -3017,9 +3017,10 @@ pub fn package_registered(full_name: &str) -> Option<bool> {
         .FindPackagesByUserSecurityId(&HSTRING::from(sid.as_str()))
         .ok()?;
     for pkg in list {
-        // A missing ID on one rogue entry is not proof the rest are gone.
-        let Ok(id) = pkg.Id() else { continue };
-        let Ok(name) = id.FullName() else { continue };
+        // A failed property query makes the inventory incomplete; don't claim
+        // an unobserved package is absent.
+        let id = pkg.Id().ok()?;
+        let name = id.FullName().ok()?;
         if name.to_string_lossy().eq_ignore_ascii_case(full_name) {
             return Some(true);
         }
@@ -3028,13 +3029,27 @@ pub fn package_registered(full_name: &str) -> Option<bool> {
 }
 
 pub fn task_exists(name: &str) -> Option<bool> {
-    let command = format!("schtasks.exe /Query /TN \"{}\"", name);
-    let (launched, code) = run_cmd(&command, true);
-    if launched != 0 {
+    if name.trim().is_empty() {
         return None;
     }
-    // schtasks exits 0 for a task that exists and non-zero for one that does not.
-    Some(code == 0)
+    let program = system_program_path("schtasks.exe").ok()?;
+    let command = format!(
+        "{} /Query /TN {} /HRESULT",
+        quote_windows_argument(&program),
+        quote_windows_argument(name)
+    );
+    let (launch_error, code) = run_cmd(&command, true);
+    if launch_error != 0 {
+        return None;
+    }
+    // With /HRESULT, only the documented file-not-found HRESULT is proof that
+    // a scheduled task is absent. Other non-zero codes may mean access denied,
+    // Task Scheduler unavailable, or an invalid request.
+    match code {
+        0 => Some(true),
+        0x8007_0002 => Some(false), // HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
+        _ => None,
+    }
 }
 
 pub fn delete_on_reboot(path: &str) -> i32 {
