@@ -2009,7 +2009,7 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
                     clear_readonly(path);
                     if std::fs::remove_dir(path).is_ok() {
                         stats.deleted += 1;
-                        let _ = std::fs::remove_file(snapshot);
+                        drop(snapshot);
                         return;
                     }
                     restore_acl_snapshot(path, &snapshot);
@@ -2029,7 +2029,7 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
                     clear_readonly(path);
                     if std::fs::remove_file(path).is_ok() {
                         stats.deleted += 1;
-                        let _ = std::fs::remove_file(snapshot);
+                        drop(snapshot);
                         return;
                     }
                     restore_acl_snapshot(path, &snapshot);
