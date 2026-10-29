@@ -1243,6 +1243,9 @@ pub fn show_properties(path: &str) -> i32 {
 }
 
 pub fn recycle(path: &str) -> i32 {
+    if is_protected_or_unsupported_path(path) {
+        return ERROR_INVALID_PARAMETER;
+    }
     let normalized = long_path(path);
     let mut from = wide(&normalized);
     from.push(0);
@@ -1896,8 +1899,10 @@ fn process_image_path(process: Handle) -> Option<String> {
 fn is_protected_or_unsupported_path(path: &str) -> bool {
     let trimmed = path.trim();
     if trimmed.is_empty()
+        || !Path::new(trimmed).is_absolute()
         || trimmed.starts_with(r"\\?\")
         || trimmed.starts_with(r"\\.\")
+        || is_root_path(trimmed)
     {
         return true;
     }
@@ -1905,7 +1910,7 @@ fn is_protected_or_unsupported_path(path: &str) -> bool {
 }
 
 fn count_or_kill_processes(path: &str, terminate: bool) -> i32 {
-    if is_protected_or_unsupported_path(path) || is_root_path(path) {
+    if is_protected_or_unsupported_path(path) {
         return 0;
     }
     let folder = normalize_path(path)
@@ -1984,7 +1989,7 @@ pub fn kill_process_by_pid(pid: u32) -> i32 {
 /// `None` means service inventory could not be read completely. Do not
 /// equate an access/configuration/enumeration error with an empty service list.
 pub fn services_under(path: &str) -> Option<Vec<String>> {
-    if path.trim().is_empty() {
+    if is_protected_or_unsupported_path(path) {
         return None;
     }
     let folder = normalize_path(path)
@@ -2804,7 +2809,10 @@ pub fn force_delete(path: &str) -> DeleteReport {
         failed: 0,
         first_error: String::new(),
     };
-    if is_root_path(path) {
+    if !Path::new(path.trim()).is_absolute() {
+        stats.failed = 1;
+        stats.first_error = format!("Refusing to delete a relative path: {}", path);
+    } else if is_root_path(path) {
         stats.failed = 1;
         stats.first_error = format!("Refusing to delete a filesystem root: {}", path);
     } else if is_protected_or_unsupported_path(path) {
@@ -3040,6 +3048,9 @@ pub fn task_exists(name: &str) -> Option<bool> {
 }
 
 pub fn delete_on_reboot(path: &str) -> i32 {
+    if is_protected_or_unsupported_path(path) {
+        return ERROR_INVALID_PARAMETER;
+    }
     let normalized = long_path(path);
     let path_wide = wide(&normalized);
     unsafe {
@@ -3583,7 +3594,7 @@ fn parse_task_names(listing: &str) -> Option<Vec<String>> {
 
 /// `None` means task discovery was incomplete, not that there were no tasks.
 pub fn tasks_under(path: &str) -> Option<Vec<String>> {
-    if path.trim().is_empty() {
+    if is_protected_or_unsupported_path(path) {
         return None;
     }
     let listing = capture_command_oem("schtasks.exe", &["/Query", "/FO", "CSV", "/V", "/NH"])?;
