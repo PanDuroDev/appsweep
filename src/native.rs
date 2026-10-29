@@ -546,7 +546,11 @@ extern "system" {
     ) -> u32;
     fn GetAce(acl: *mut c_void, index: u32, ace: *mut *mut c_void) -> Bool;
     fn EqualSid(first_sid: *mut c_void, second_sid: *mut c_void) -> Bool;
-    fn OpenSCManagerW(machine_name: *const u16, database_name: *const u16, desired_access: u32) -> Handle;
+    fn OpenSCManagerW(
+        machine_name: *const u16,
+        database_name: *const u16,
+        desired_access: u32,
+    ) -> Handle;
     fn EnumServicesStatusExW(
         manager: Handle,
         information_level: u32,
@@ -591,7 +595,11 @@ extern "system" {
         file_info_size: u32,
         flags: u32,
     ) -> usize;
-    fn SHGetImageList(image_list: i32, interface_id: *const Guid, result: *mut *mut c_void) -> HResult;
+    fn SHGetImageList(
+        image_list: i32,
+        interface_id: *const Guid,
+        result: *mut *mut c_void,
+    ) -> HResult;
     fn ExtractIconExW(
         file_name: *const u16,
         icon_index: i32,
@@ -1071,7 +1079,14 @@ pub fn shell_open(what: &str) -> i32 {
     let verb = wide("open");
     let target = wide(what);
     unsafe {
-        let result = ShellExecuteW(null_mut(), verb.as_ptr(), target.as_ptr(), null(), null(), SW_SHOWNORMAL);
+        let result = ShellExecuteW(
+            null_mut(),
+            verb.as_ptr(),
+            target.as_ptr(),
+            null(),
+            null(),
+            SW_SHOWNORMAL,
+        );
         if result > 32 { 0 } else { result as i32 }
     }
 }
@@ -2275,7 +2290,8 @@ pub fn delete_on_reboot(path: &str) -> i32 {
 }
 
 pub fn create_restore_point(description: &str) -> i32 {
-    type RestoreFn = unsafe extern "system" fn(*mut RestorePointInfoW, *mut StateManagerStatus) -> Bool;
+    type RestoreFn =
+        unsafe extern "system" fn(*mut RestorePointInfoW, *mut StateManagerStatus) -> Bool;
     unsafe {
         let library = wide("srclient.dll");
         let module = LoadLibraryW(library.as_ptr());
@@ -2294,7 +2310,11 @@ pub fn create_restore_point(description: &str) -> i32 {
         let mut status: StateManagerStatus = zeroed();
         status.event_type = info.event_type;
         status.restore_point_type = info.restore_point_type;
-        for (index, unit) in description.encode_utf16().take(info.description.len() - 1).enumerate() {
+        for (index, unit) in description
+            .encode_utf16()
+            .take(info.description.len() - 1)
+            .enumerate()
+        {
             info.description[index] = unit;
         }
         if description.is_empty() {
