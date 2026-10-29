@@ -56,8 +56,6 @@ extern "C" {
 
     fn as_count_processes_in_path(path: *const u16) -> i32;
     fn as_kill_processes_in_path(path: *const u16) -> i32;
-    fn as_path_is_under(folder: *const u16, candidate: *const u16) -> i32;
-    fn as_command_executable(cmd: *const u16, out: *mut u16, cap: i32) -> i32;
     fn as_list_services_under(path: *const u16, out: *mut u16, cap: i32) -> i32;
     fn as_stop_delete_service(name: *const u16) -> i32;
 
@@ -269,18 +267,62 @@ pub fn kill_processes_in(path: &str) -> i32 {
 
 /// Is `candidate` the folder itself or a file inside it? Same rule the helper
 /// uses before it counts or kills a process.
+fn long_path(path: &str) -> String {
+    if path.starts_with(r"\\?\\") {
+        path.to_string()
+    } else if let Some(unc) = path.strip_prefix(r"\\") {
+        format!(r"\\?\UNC\\{}", unc)
+    } else {
+        format!(r"\\?\\{}", path)
+    }
+}
+
+fn normalize_path(path: &str) -> String {
+    let mut value = long_path(path).replace('/', r"\\").to_lowercase();
+    while value.ends_with('\\') && value.len() > 4 {
+        value.pop();
+    }
+    value
+}
+
+fn is_under_normalized(folder: &str, candidate: &str) -> bool {
+    if folder.is_empty() || candidate.len() < folder.len() || !candidate.starts_with(folder) {
+        return false;
+    }
+    candidate.len() == folder.len()
+        || candidate.as_bytes().get(folder.len()).is_some_and(|c| *c == b'\\' || *c == b'/')
+}
+
 pub fn path_is_under(folder: &str, candidate: &str) -> bool {
-    let f = wide(folder);
-    let c = wide(candidate);
-    unsafe { as_path_is_under(f.as_ptr(), c.as_ptr()) != 0 }
+    is_under_normalized(&normalize_path(folder), &normalize_path(candidate))
 }
 
 pub fn command_executable(cmd: &str) -> String {
-    let w = wide(cmd);
-    take_string(
-        |out, cap| unsafe { as_command_executable(w.as_ptr(), out, cap) },
-        1024,
-    )
+    let trimmed = cmd.trim_start_matches(|c: char| c == ' ' || c == '\\t' || c == '"');
+    let leading = cmd.len() - trimmed.len();
+    let quoted = leading > 0 && cmd[..leading].contains('"');
+    let executable = if quoted {
+        let start = leading;
+        let rest = &cmd[start..];
+        match rest.find('"') {
+            Some(end) => &rest[..end],
+            None => rest,
+        }
+    } else {
+        let mut end = trimmed.len();
+        let bytes = trimmed.as_bytes();
+        for i in 0..bytes.len().saturating_sub(1) {
+            if (bytes[i] == b' ' || bytes[i] == b'\\t')
+                && (bytes[i + 1] == b'/' || bytes[i + 1] == b'-')
+            {
+                end = i;
+                break;
+            }
+        }
+        &trimmed[..end]
+    };
+    let normalized = long_path(executable);
+    normalized.strip_prefix(r"\\?\\").unwrap_or(&normalized).to_string()
 }
 
 pub fn services_under(path: &str) -> Vec<String> {
