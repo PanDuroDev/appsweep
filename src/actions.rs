@@ -1017,6 +1017,12 @@ fn run_elevated_plan(plan: &PurgePlan) -> Result<PurgeResult, String> {
         if rc != 0 {
             return Err(format!("Could not elevate (code {})", rc));
         }
+        if exit_code == 6 {
+            return Err(
+                "Elevation was requested under a different Windows account. Retry with the same account."
+                    .into(),
+            );
+        }
         return Err(format!(
             "Elevated cleanup process failed (exit code {})",
             exit_code
@@ -1077,12 +1083,15 @@ fn validate_elevated_plan_path(path: &str) -> Result<(PathBuf, PathBuf), String>
     Ok((canonical_path, result_path))
 }
 
+fn caller_sid_matches(expected_user_sid: &str, actual_user_sid: &str) -> bool {
+    !expected_user_sid.is_empty()
+        && !actual_user_sid.is_empty()
+        && actual_user_sid.eq_ignore_ascii_case(expected_user_sid)
+}
+
 pub fn run_plan_file(path: &str, expected_user_sid: &str) -> i32 {
     let actual_user_sid = crate::native::current_user_sid();
-    if expected_user_sid.is_empty()
-        || actual_user_sid.is_empty()
-        || !actual_user_sid.eq_ignore_ascii_case(expected_user_sid)
-    {
+    if !caller_sid_matches(expected_user_sid, &actual_user_sid) {
         eprintln!("Rejected elevated plan: it was requested by a different Windows account");
         return 6;
     }
@@ -2497,6 +2506,14 @@ mod tests {
             Verdict::Left(msg) => assert!(msg.starts_with("Still on disk:")),
             other => panic!("expected Left, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn elevated_plan_requires_the_same_windows_account() {
+        assert!(caller_sid_matches("S-1-5-21-123", "s-1-5-21-123"));
+        assert!(!caller_sid_matches("S-1-5-21-123", "S-1-5-21-456"));
+        assert!(!caller_sid_matches("", "S-1-5-21-123"));
+        assert!(!caller_sid_matches("S-1-5-21-123", ""));
     }
 
     #[test]
