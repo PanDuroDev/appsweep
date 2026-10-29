@@ -12,13 +12,9 @@ use std::os::windows::process::CommandExt;
 
 type Handle = *mut c_void;
 type Bool = i32;
-type Dword = u32;
 type HResult = i32;
 
 const ERROR_INVALID_PARAMETER: i32 = 87;
-const ERROR_ALREADY_EXISTS: i32 = 183;
-const ERROR_MORE_DATA: u32 = 234;
-const WAIT_OBJECT_0: u32 = 0;
 const WAIT_TIMEOUT: u32 = 0x102;
 const INFINITE: u32 = 0xffff_ffff;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -37,7 +33,6 @@ const DACL_SECURITY_INFORMATION: u32 = 0x0004;
 const PROTECTED_DACL_SECURITY_INFORMATION: u32 = 0x8000_0000;
 const SET_ACCESS: u32 = 2;
 const TRUSTEE_IS_SID: u32 = 0;
-const TRUSTEE_IS_USER: u32 = 1;
 const TRUSTEE_IS_GROUP: u32 = 2;
 const TRUSTEE_IS_WELL_KNOWN_GROUP: u32 = 5;
 const NO_INHERITANCE: u32 = 0;
