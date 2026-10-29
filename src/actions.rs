@@ -486,8 +486,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
         flow,
         settings,
         keep_data,
-        |path| crate::native::services_under(path),
-        |path| crate::native::tasks_under(path),
+        crate::native::services_under,
+        crate::native::tasks_under,
     )
 }
 
