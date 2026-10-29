@@ -100,6 +100,9 @@ pub enum Op {
         reg: Vec<(RegRoot, String)>,
         services: Vec<String>,
         tasks: Vec<String>,
+        /// True when scheduled-task discovery failed, so verification cannot
+        /// report "Removed completely" based on an unchecked task list.
+        tasks_unknown: bool,
         shortcuts: Vec<String>,
         package: Option<String>,
     },
@@ -538,29 +541,40 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
     // Services, scheduled tasks and shortcuts that live in the app folder are
     // part of what Uninstall and Purge both have to remove - and what Verify
     // has to check afterwards, so they are discovered once, up front.
-    let svc_names: Vec<String> = match &dir {
-        Some(d) => crate::native::services_under(&s(d)),
-        None => Vec::new(),
+    let svc_names: Vec<String> = if flow == Flow::FilesOnly {
+        Vec::new()
+    } else {
+        match &dir {
+            Some(d) => crate::native::services_under(&s(d)),
+            None => Vec::new(),
+        }
     };
-    let tasks: Vec<String> = match &dir {
-        Some(d) => match crate::native::tasks_under(&s(d)) {
-            Some(found) => found,
-            None => {
-                // The list could not be read: cleanup may leave startup tasks
-                // behind, and "no tasks" would be a claim nobody checked.
-                add(
-                    "List scheduled tasks",
-                    "The task list could not be read - startup tasks may remain",
-                    Op::Note {
-                        message: "Scheduled tasks could not be listed".into(),
-                    },
-                    false,
-                    true,
-                );
-                Vec::new()
-            }
-        },
-        None => Vec::new(),
+    let mut tasks_unknown = false;
+    let tasks: Vec<String> = if flow == Flow::FilesOnly {
+        // This flow intentionally leaves services and scheduled tasks alone.
+        Vec::new()
+    } else {
+        match &dir {
+            Some(d) => match crate::native::tasks_under(&s(d)) {
+                Some(found) => found,
+                None => {
+                    tasks_unknown = true;
+                    // The list could not be read: cleanup may leave startup tasks
+                    // behind, and "no tasks" would be a claim nobody checked.
+                    add(
+                        "List scheduled tasks",
+                        "The task list could not be read - startup tasks may remain",
+                        Op::Note {
+                            message: "Scheduled tasks could not be listed".into(),
+                        },
+                        false,
+                        true,
+                    );
+                    Vec::new()
+                }
+            },
+            None => Vec::new(),
+        }
     };
     let shortcuts: Vec<String> = app.shortcuts.iter().map(|p| s(p)).collect();
 
@@ -809,9 +823,15 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
             },
             services: svc_names.clone(),
             tasks: tasks.clone(),
-            shortcuts: shortcuts.clone(),
-            package: match app.source {
-                Source::Uwp => app.package_full_name.clone(),
+            tasks_unknown,
+            shortcuts: if flow == Flow::FilesOnly {
+                Vec::new()
+            } else {
+                shortcuts.clone()
+            },
+            package: match (flow, app.source) {
+                (Flow::FilesOnly, _) => None,
+                (_, Source::Uwp) => app.package_full_name.clone(),
                 _ => None,
             },
         },
@@ -988,6 +1008,7 @@ fn verify_all(
     tasks: &[String],
     shortcuts: &[String],
     package: Option<&str>,
+    tasks_unknown: bool,
 ) -> Verdict {
     // Flipping to UnknownState the first time a probe fails, so a broken probe
     // can never be reported as clean.
@@ -997,7 +1018,9 @@ fn verify_all(
         }
     }
 
-    let mut unknown: Option<String> = None;
+    let mut unknown: Option<String> = tasks_unknown.then(|| {
+        "Could not check scheduled tasks (the task list could not be read)".to_string()
+    });
     let mut left: Vec<String> = Vec::new();
 
     for p in paths.iter().chain(shortcuts.iter()) {
@@ -1015,18 +1038,24 @@ fn verify_all(
         }
     }
     for name in services {
-        if crate::native::service_exists(name) == Some(true) {
-            left.push(format!("service {}", name));
+        match crate::native::service_exists(name) {
+            Some(true) => left.push(format!("service {}", name)),
+            Some(false) => {}
+            None => note_unknown(&mut unknown, name, "service query failed"),
         }
     }
     for name in tasks {
-        if crate::native::task_exists(name) == Some(true) {
-            left.push(format!("task {}", name));
+        match crate::native::task_exists(name) {
+            Some(true) => left.push(format!("task {}", name)),
+            Some(false) => {}
+            None => note_unknown(&mut unknown, name, "scheduled-task query failed"),
         }
     }
     if let Some(full) = package {
-        if crate::native::package_registered(full) == Some(true) {
-            left.push(format!("package {}", full));
+        match crate::native::package_registered(full) {
+            Some(true) => left.push(format!("package {}", full)),
+            Some(false) => {}
+            None => note_unknown(&mut unknown, full, "package query failed"),
         }
     }
 
@@ -1476,11 +1505,20 @@ impl Runner {
                 reg,
                 services,
                 tasks,
+                tasks_unknown,
                 shortcuts,
                 package,
             } => {
                 let (st, detail) =
-                    match verify_all(paths, reg, services, tasks, shortcuts, package.as_deref()) {
+                    match verify_all(
+                        paths,
+                        reg,
+                        services,
+                        tasks,
+                        shortcuts,
+                        package.as_deref(),
+                        *tasks_unknown,
+                    ) {
                         Verdict::Gone => {
                             self.verified_gone = true;
                             (StepStatus::Ok, "Removed completely".to_string())
@@ -1961,6 +1999,7 @@ pub fn selftest() -> i32 {
         &[],
         &[],
         None,
+        false,
     ) {
         Verdict::Gone => {}
         other => {
@@ -2197,21 +2236,31 @@ mod tests {
         // A path that cannot exist on this machine: verified as gone.
         let missing = "D:\\Apps\\AppSweep-verify-does-not-exist-42";
         assert_eq!(
-            verify_all(&[missing.to_string()], &[], &[], &[], &[], None),
+            verify_all(&[missing.to_string()], &[], &[], &[], &[], None, false),
             Verdict::Gone
         );
         // Nothing tracked at all is not proof of anything either: there is
         // simply nothing to report as left, so it stays Gone only when every
         // requested probe answered.
-        assert_eq!(verify_all(&[], &[], &[], &[], &[], None), Verdict::Gone);
+        assert_eq!(verify_all(&[], &[], &[], &[], &[], None, false), Verdict::Gone);
         // A path that does exist is left behind, never a clean pass.
         let here = std::env::current_exe()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        match verify_all(&[here], &[], &[], &[], &[], None) {
+        match verify_all(&[here], &[], &[], &[], &[], None, false) {
             Verdict::Left(msg) => assert!(msg.starts_with("Still on disk:")),
             other => panic!("expected Left, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn unknown_task_discovery_never_reports_complete_removal() {
+        assert_eq!(
+            verify_all(&[], &[], &[], &[], &[], None, true),
+            Verdict::UnknownState(
+                "Could not check scheduled tasks (the task list could not be read)".to_string()
+            )
+        );
     }
 
     #[test]
