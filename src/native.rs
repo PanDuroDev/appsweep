@@ -3314,53 +3314,86 @@ fn command_targets_folder(folder: &str, command_line: &str) -> bool {
         .any(|argument| path_is_under(folder, argument))
 }
 
-/// Named tasks in a `schtasks /Query /FO LIST /V` listing whose command runs
-/// something inside `folder`.
-fn parse_tasks(listing: &str, folder: &str) -> Vec<String> {
-    let mut result = Vec::new();
-    let mut task_name = String::new();
-    let mut task_hit = false;
+/// Parse Windows CSV output without depending on localized column labels.
+/// `schtasks /Query /FO CSV /V /NH` keeps the documented column order while
+/// suppressing localized headings; TaskName is column 1 and Task To Run column 8.
+fn parse_csv_rows(input: &str) -> Option<Vec<Vec<String>>> {
+    let mut rows = Vec::new();
+    let mut row = Vec::new();
+    let mut field = String::new();
+    let mut quoted = false;
+    let mut chars = input.chars().peekable();
 
-    let flush = |task_name: &mut String, task_hit: &mut bool, result: &mut Vec<String>| {
-        if !task_name.is_empty() && *task_hit {
-            result.push(std::mem::take(task_name));
-        } else {
-            task_name.clear();
-        }
-        *task_hit = false;
-    };
-
-    for original_line in listing.lines() {
-        let line = original_line.trim_end_matches(['\r', ' ']);
-        if line.is_empty() {
-            flush(&mut task_name, &mut task_hit, &mut result);
+    while let Some(ch) = chars.next() {
+        if quoted {
+            if ch == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    field.push('"');
+                } else {
+                    quoted = false;
+                }
+            } else {
+                field.push(ch);
+            }
             continue;
         }
-        let Some(colon) = line.find(':') else {
-            continue;
-        };
-        let key = &line[..colon];
-        let value = line[colon + 1..].trim_start();
-        if key == "TaskName" {
-            task_name = value.to_string();
-        } else if key == "Task To Run" {
-            // A task can have multiple actions; any command under the target
-            // folder makes the task related. Metadata/arguments alone do not.
-            task_hit |= command_targets_folder(folder, value);
+
+        match ch {
+            '"' if field.is_empty() => quoted = true,
+            ',' => row.push(std::mem::take(&mut field)),
+            '\r' | '\n' => {
+                if ch == '\r' && chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                row.push(std::mem::take(&mut field));
+                if row.iter().any(|value| !value.is_empty()) {
+                    rows.push(std::mem::take(&mut row));
+                } else {
+                    row.clear();
+                }
+            }
+            _ => field.push(ch),
         }
     }
-    flush(&mut task_name, &mut task_hit, &mut result);
-    result
+
+    if quoted {
+        return None;
+    }
+    if !field.is_empty() || !row.is_empty() {
+        row.push(field);
+        if row.iter().any(|value| !value.is_empty()) {
+            rows.push(row);
+        }
+    }
+    Some(rows)
 }
 
-/// `None` when the task list could not be read at all; an empty list is a real
-/// "this folder has no tasks".
+fn parse_tasks(listing: &str, folder: &str) -> Option<Vec<String>> {
+    let rows = parse_csv_rows(listing)?;
+    let mut result = Vec::new();
+    for row in rows {
+        // Fail closed if a row is malformed: silently skipping it could leave a
+        // task pointing into an installation directory that Purge then removes.
+        if row.len() < 9 {
+            return None;
+        }
+        let task_name = row[1].trim();
+        let command = row[8].trim();
+        if !task_name.is_empty() && command_targets_folder(folder, command) {
+            result.push(task_name.to_string());
+        }
+    }
+    Some(result)
+}
+
+/// `None` means task discovery was incomplete, not that there were no tasks.
 pub fn tasks_under(path: &str) -> Option<Vec<String>> {
     if path.trim().is_empty() {
         return None;
     }
-    let listing = capture_command_oem("schtasks.exe", &["/Query", "/FO", "LIST", "/V"])?;
-    Some(parse_tasks(&listing, path))
+    let listing = capture_command_oem("schtasks.exe", &["/Query", "/FO", "CSV", "/V", "/NH"])?;
+    parse_tasks(&listing, path)
 }
 
 pub fn path_size(path: &str) -> u64 {
@@ -3404,11 +3437,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn task_discovery_rejects_blank_paths_and_matches_any_task_action() {
+    fn task_discovery_rejects_blank_paths_and_uses_path_aware_csv_fields() {
         assert_eq!(tasks_under("   "), None);
-        let listing = "TaskName: \\Demo\\First\nTask To Run: C:\\Apps\\Foobar\\tool.exe\nTask To Run: C:\\Apps\\Foo\\tool.exe\n\n";
-        assert_eq!(parse_tasks(listing, r"C:\Apps\Foo"), vec![r"\Demo\First"]);
-        assert!(parse_tasks(listing, "  ").is_empty());
+        let listing = r#""localhost","\\Demo\\Sibling","N/A","Ready","Interactive","N/A","0","User","C:\\Apps\\Foobar\\tool.exe"
+"localhost","\\Demo\\Owned","N/A","Ready","Interactive","N/A","0","User","C:\\Apps\\Foo\\tool.exe"
+"#;
+        assert_eq!(
+            parse_tasks(listing, r"C:\Apps\Foo"),
+            Some(vec![r"\\Demo\\Owned".to_string()])
+        );
+        assert_eq!(parse_tasks("", r"C:\Apps\Foo"), Some(Vec::new()));
+        assert_eq!(parse_tasks(r#""host","incomplete""#, r"C:\Apps\Foo"), None);
+        assert_eq!(parse_tasks(r#""host","unterminated"#, r"C:\Apps\Foo"), None);
     }
 
     #[test]
