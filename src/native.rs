@@ -1328,6 +1328,22 @@ pub fn kill_processes_in(path: &str) -> i32 {
     count_or_kill_processes(path, true)
 }
 
+pub fn kill_process_by_pid(pid: u32) -> i32 {
+    unsafe {
+        let process = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if process.is_null() {
+            return GetLastError() as i32;
+        }
+        let result = if TerminateProcess(process, 1) != 0 {
+            0
+        } else {
+            GetLastError() as i32
+        };
+        let _ = CloseHandle(process);
+        result
+    }
+}
+
 pub fn services_under(path: &str) -> Vec<String> {
     if path.trim().is_empty() {
         return Vec::new();
@@ -1666,15 +1682,26 @@ pub struct DeleteReport {
 
 fn is_root_path(path: &str) -> bool {
     let normalized = path.replace('/', "\\");
-    let trimmed = normalized.trim_end_matches(|ch| ch == '\\' || ch == '/');
+    let trimmed = normalized.trim_end_matches(|ch| ch == '\\' || '/');
     if trimmed.is_empty() {
         return true;
     }
+
+    if let Some(extended) = trimmed.strip_prefix(r"\\?\") {
+        if let Some(unc) = extended.strip_prefix("UNC\\") {
+            return unc.split('\\').filter(|part| !part.is_empty()).count() <= 2;
+        }
+        if is_root_path(extended) {
+            return true;
+        }
+        return extended.starts_with("Volume{") && !extended.contains('\\');
+    }
+
     let bytes = trimmed.as_bytes();
     if bytes.len() == 2 && bytes[1] == b':' {
         return true;
     }
-    if trimmed.starts_with("\\\\") {
+    if trimmed.starts_with(r"\\") {
         let parts = trimmed
             .trim_start_matches('\\')
             .split('\\')
@@ -1919,6 +1946,20 @@ mod tests {
         assert!(!path_is_under(r"C:\Apps\Foo", r"D:\Tools\Foo\a.exe"));
         assert!(!path_is_under(r"C:\Apps\Foo", ""));
         assert!(path_is_under(r"\\server\share\Foo", r"\\server\share\Foo\a.exe"));
+    }
+
+    #[test]
+    fn deletion_guard_rejects_drive_and_unc_roots() {
+        assert!(is_root_path(r"C:\"));
+        assert!(is_root_path("C:"));
+        assert!(is_root_path("\\"));
+        assert!(is_root_path(r"\\server\share"));
+        assert!(is_root_path(r"\\?\C:\"));
+        assert!(is_root_path(r"\\?\UNC\server\share"));
+        assert!(is_root_path(r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\"));
+        assert!(!is_root_path(r"C:\Apps\Demo"));
+        assert!(!is_root_path(r"\\server\share\Demo"));
+        assert!(!is_root_path(r"\\?\UNC\server\share\Demo"));
     }
 
     #[test]
