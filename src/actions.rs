@@ -1546,7 +1546,109 @@ pub fn selftest() -> i32 {
     }
     println!("backup failures: {}", bk_failures);
 
-    if dir_gone && reg_gone && failures == 0 && bk_failures == 0 {
+    // ---- path matching: a sibling folder must never look like a child one
+    let mut path_failures = 0;
+    let under = |folder: &str, cand: &str| crate::native::path_is_under(folder, cand);
+    let cases: [(&str, &str, bool); 10] = [
+        ("C:\\Apps\\Foo", "C:\\Apps\\Foo\\app.exe", true),
+        ("C:\\Apps\\Foo", "C:\\Apps\\Foobar\\other.exe", false),
+        ("C:\\Apps\\Foo", "C:\\Apps\\Foo", true),
+        ("C:\\Apps\\Foo\\", "C:\\Apps\\Foo\\app.exe", true),
+        ("C:\\Apps\\Foo", "D:\\Tools\\Foo\\other.exe", false),
+        ("c:\\apps\\foo", "C:\\Apps\\Foo\\App.EXE", true),
+        ("C:\\Apps\\Foo", "C:\\Apps\\Foo2", false),
+        ("C:\\Apps\\Foo", "", false),
+        ("C:\\Apps\\Foo", "C:\\Apps\\Fo", false),
+        (
+            "\\\\server\\share\\Foo",
+            "\\\\server\\share\\Foo\\a.exe",
+            true,
+        ),
+    ];
+    for (folder, cand, want) in cases {
+        let got = under(folder, cand);
+        println!("under {:?} <- {:?}: {} (want {})", folder, cand, got, want);
+        if got != want {
+            path_failures += 1;
+        }
+    }
+    // Service command lines: only the executable counts, and its arguments must
+    // not turn a sibling folder into a match.
+    let exe_cases: [(&str, &str); 4] = [
+        (
+            "\"C:\\Apps\\Foo\\foo.exe\" --service",
+            "C:\\Apps\\Foo\\foo.exe",
+        ),
+        (
+            "C:\\Apps\\Foo\\foo.exe -k netsvcs",
+            "C:\\Apps\\Foo\\foo.exe",
+        ),
+        (
+            "\"C:\\Program Files\\Foo Bar\\a b.exe\" /run",
+            "C:\\Program Files\\Foo Bar\\a b.exe",
+        ),
+        (
+            "C:\\Apps\\Foobar\\other.exe -c \"C:\\Apps\\Foo\"",
+            "C:\\Apps\\Foobar\\other.exe",
+        ),
+    ];
+    for (cmd, want) in exe_cases {
+        let got = crate::native::command_executable(cmd);
+        println!("cmd {:?} -> {:?} (want {:?})", cmd, got, want);
+        if got != want {
+            path_failures += 1;
+        }
+    }
+    println!("path failures: {}", path_failures);
+
+    // ---- ACL safety (issue #5): a forced delete must not leave an object with
+    // Everyone full control behind. Disposable temp tree only.
+    let mut acl_failures = 0;
+    let acl_root = root.join("AclApp");
+    let acl_inner = acl_root.join("locked");
+    let _ = std::fs::create_dir_all(&acl_inner);
+    let _ = std::fs::write(acl_inner.join("f.txt"), b"x");
+    let before =
+        crate::native::grants_everyone_full_control(acl_inner.to_str().unwrap_or_default());
+    println!("acl everyone-full before delete: {}", before);
+    if before != 0 {
+        acl_failures += 1;
+    }
+    // The detector must actually be able to see a bad ACE, or the check above
+    // proves nothing.
+    let probe = acl_root.join("probe");
+    let _ = std::fs::create_dir_all(&probe);
+    let granted = crate::native::grant_everyone_full_control(probe.to_str().unwrap_or_default());
+    let seen = crate::native::grants_everyone_full_control(probe.to_str().unwrap_or_default());
+    println!("acl probe: grant={} detected={}", granted, seen);
+    if granted == 0 && seen != 1 {
+        acl_failures += 1;
+    }
+    let _ = crate::native::force_delete(probe.to_str().unwrap_or_default());
+    let rep = crate::native::force_delete(acl_root.to_str().unwrap_or_default());
+    println!(
+        "acl force delete: deleted={} failed={} gone={}",
+        rep.deleted,
+        rep.failed,
+        !acl_root.exists()
+    );
+    if acl_root.exists() {
+        let after =
+            crate::native::grants_everyone_full_control(acl_inner.to_str().unwrap_or_default());
+        println!("acl everyone-full after failed delete: {}", after);
+        if after != 0 {
+            acl_failures += 1;
+        }
+    }
+    println!("acl failures: {}", acl_failures);
+
+    if dir_gone
+        && reg_gone
+        && failures == 0
+        && bk_failures == 0
+        && path_failures == 0
+        && acl_failures == 0
+    {
         println!("SELFTEST OK");
         0
     } else {

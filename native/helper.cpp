@@ -450,6 +450,62 @@ static std::wstring lower(std::wstring s) {
     return s;
 }
 
+// True when `candidate` is the folder itself or a file inside it. A plain prefix
+// test also matched siblings: "C:\Apps\Foo" claimed "C:\Apps\Foobar\other.exe".
+static bool under_folder(const std::wstring& folder, const std::wstring& candidate) {
+    if (folder.empty()) return false;
+    if (candidate.size() < folder.size()) return false;
+    if (candidate.compare(0, folder.size(), folder) != 0) return false;
+    if (candidate.size() == folder.size()) return true;
+    return candidate[folder.size()] == L'\\' || candidate[folder.size()] == L'/';
+}
+
+// Resolve either an executable path or a service command line to the executable
+// it starts, honouring a quoted path and the usual unquoted forms.
+static std::wstring command_executable(const std::wstring& cmd) {
+    size_t i = 0;
+    while (i < cmd.size() && (cmd[i] == L' ' || cmd[i] == L'\t' || cmd[i] == L'"')) i++;
+    std::wstring out;
+    if (i < cmd.size() && i > 0 && cmd[0] == L'"') {
+        // Quoted: everything up to the closing quote, even with spaces inside.
+        size_t end = cmd.find(L'"', i);
+        out = cmd.substr(i, end == std::wstring::npos ? std::wstring::npos : end - i);
+    } else {
+        // Unquoted: a space followed by a '/' or '-' starts the arguments.
+        size_t end = cmd.size();
+        for (size_t k = i; k < cmd.size(); k++) {
+            if ((cmd[k] == L' ' || cmd[k] == L'\t') && k + 1 < cmd.size() &&
+                (cmd[k + 1] == L'/' || cmd[k + 1] == L'-')) {
+                end = k;
+                break;
+            }
+        }
+        out = cmd.substr(i, end - i);
+    }
+    return long_path(out);
+}
+
+// Public for the self-test: does the cleanup planner consider `candidate` a
+// process image inside `folder`?
+int as_path_is_under(const wchar_t* folder, const wchar_t* candidate) {
+    if (!folder || !candidate) return 0;
+    std::wstring f = lower(long_path(folder));
+    while (!f.empty() && (f.back() == L'\\' || f.back() == L'/')) f.pop_back();
+    return under_folder(f, lower(long_path(candidate))) ? 1 : 0;
+}
+
+// Public for the self-test: the executable a command line starts.
+int as_command_executable(const wchar_t* cmd, wchar_t* out, int cap) {
+    if (!cmd || !out || cap <= 0) return ERROR_INVALID_PARAMETER;
+    out[0] = 0;
+    std::wstring exe = command_executable(cmd);
+    // The service matcher does not need the \\?\ form, and the self-test wants
+    // a path it can read back.
+    if (exe.compare(0, 4, L"\\\\?\\") == 0) exe = exe.substr(4);
+    copy_w(exe, out, cap);
+    return 0;
+}
+
 static int count_or_kill_processes(const wchar_t* path, int do_kill) {
     if (!path) return 0;
     std::wstring prefix = lower(long_path(path));
@@ -470,7 +526,7 @@ static int count_or_kill_processes(const wchar_t* path, int do_kill) {
             DWORD sz = MAX_PATH * 2;
             if (QueryFullProcessImageNameW(hp, 0, img, &sz)) {
                 std::wstring p = lower(long_path(img));
-                if (p.size() >= prefix.size() && p.compare(0, prefix.size(), prefix) == 0) {
+                if (under_folder(prefix, p)) {
                     count++;
                     if (do_kill) {
                         TerminateProcess(hp, 1);
@@ -516,8 +572,8 @@ int as_list_services_under(const wchar_t* path, wchar_t* out, int cap) {
             if (QueryServiceConfigW(svc, (LPQUERY_SERVICE_CONFIGW)cfg.data(), (DWORD)cfg.size(), &sz)) {
                 auto* qc = (LPQUERY_SERVICE_CONFIGW)cfg.data();
                 if (qc->lpBinaryPathName) {
-                    std::wstring img = lower(long_path(qc->lpBinaryPathName));
-                    if (img.find(prefix) != std::wstring::npos) {
+                    std::wstring img = lower(command_executable(qc->lpBinaryPathName));
+                    if (under_folder(prefix, img)) {
                         if (!result.empty()) result.push_back(L'\n');
                         result += items[i].lpServiceName;
                     }
@@ -564,7 +620,43 @@ static void clear_readonly(const std::wstring& p) {
     }
 }
 
-static void take_ownership(const std::wstring& p) {
+// The original security descriptor is captured before any change and put back
+// if the delete still fails right after the relaxation.
+struct SavedSecurity {
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    PSID owner = nullptr;
+    PSID owner_group = nullptr;
+
+    ~SavedSecurity() {
+        if (sd) LocalFree(sd);
+    }
+};
+
+static bool save_security(const std::wstring& p, SavedSecurity& out) {
+    PACL dacl = nullptr;
+    return GetNamedSecurityInfoW((LPWSTR)p.c_str(), SE_FILE_OBJECT,
+                                 OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+                                     DACL_SECURITY_INFORMATION,
+                                 &out.owner, &out.owner_group, &dacl, nullptr, &out.sd) ==
+           ERROR_SUCCESS;
+}
+
+static bool restore_security(const std::wstring& p, const SavedSecurity& saved) {
+    if (!saved.sd) return false;
+    BOOL present = FALSE, dacl_defaulted = FALSE;
+    PACL dacl = nullptr;
+    GetSecurityDescriptorDacl(saved.sd, &present, &dacl, &dacl_defaulted);
+    return SetNamedSecurityInfoW((LPWSTR)p.c_str(), SE_FILE_OBJECT,
+                                 OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+                                     (present ? DACL_SECURITY_INFORMATION : 0),
+                                 saved.owner, saved.owner_group, present ? dacl : nullptr, nullptr) ==
+           ERROR_SUCCESS;
+}
+
+// Returns false when the object could not be relaxed. Never widens the
+// permissions beyond the current user, and drops the inherited ACEs so a
+// surviving folder cannot hand out access to its children.
+static bool take_ownership(const std::wstring& p) {
     enable_privilege(L"SeTakeOwnershipPrivilege");
     enable_privilege(L"SeRestorePrivilege");
     enable_privilege(L"SeBackupPrivilege");
@@ -574,24 +666,51 @@ static void take_ownership(const std::wstring& p) {
         SetNamedSecurityInfoW((LPWSTR)p.c_str(), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, admins, nullptr, nullptr, nullptr);
         FreeSid(admins);
     }
-    // Grant full control to everyone so the recursive delete cannot trip on ACLs.
-    PSID everyone = nullptr;
-    SID_IDENTIFIER_AUTHORITY world = SECURITY_WORLD_SID_AUTHORITY;
-    if (AllocateAndInitializeSid(&world, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, &everyone)) {
-        EXPLICIT_ACCESSW ea{};
-        ea.grfAccessPermissions = GENERIC_ALL;
-        ea.grfAccessMode = SET_ACCESS;
-        ea.grfInheritance = SUB_CONTAINERS_AND_OBJECTS_INHERIT;
-        ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
-        ea.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
-        ea.Trustee.ptstrName = (LPWSTR)everyone;
-        PACL acl = nullptr;
-        if (SetEntriesInAclW(1, &ea, nullptr, &acl) == ERROR_SUCCESS && acl) {
-            SetNamedSecurityInfoW((LPWSTR)p.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, acl, nullptr);
-            LocalFree(acl);
+    // The deleting process already runs as the owner after the step above, so the
+    // narrower grant is "the current user", not Everyone, and it does not
+    // inherit: a failed delete must not leave child objects more open than before.
+    PSID user = nullptr;
+    SECURITY_INFORMATION info = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
+    EXPLICIT_ACCESSW ea{};
+    ea.grfAccessPermissions = DELETE | FILE_DELETE_CHILD | FILE_GENERIC_READ | FILE_GENERIC_WRITE | READ_CONTROL | SYNCHRONIZE;
+    ea.grfAccessMode = SET_ACCESS;
+    ea.grfInheritance = NO_INHERITANCE;
+    ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    ea.Trustee.TrusteeType = TRUSTEE_IS_USER;
+    SID_IDENTIFIER_AUTHORITY nt_auth = SECURITY_NT_AUTHORITY;
+    BOOL is_user = FALSE;
+    if (AllocateAndInitializeSid(&nt_auth, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &user) &&
+        CheckTokenMembership(nullptr, user, &is_user)) {
+        // Running elevated: the process token is the Administrators group, so that
+        // group is the narrowest grant that lets this process delete.
+        FreeSid(user);
+        user = nullptr;
+        if (!is_user) {
+            return false;
         }
-        FreeSid(everyone);
+        if (!AllocateAndInitializeSid(&nt_auth, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &user)) {
+            return false;
+        }
+        ea.Trustee.TrusteeType = TRUSTEE_IS_GROUP;
+    } else {
+        if (user) {
+            FreeSid(user);
+            user = nullptr;
+        }
+        // No safe narrow grant without knowing who is deleting; stop rather than
+        // fall back to Everyone.
+        return false;
     }
+    ea.Trustee.ptstrName = (LPWSTR)user;
+    PACL acl = nullptr;
+    DWORD rc = SetEntriesInAclW(1, &ea, nullptr, &acl);
+    bool ok = false;
+    if (rc == ERROR_SUCCESS && acl) {
+        ok = SetNamedSecurityInfoW((LPWSTR)p.c_str(), SE_FILE_OBJECT, info, nullptr, nullptr, acl, nullptr) == ERROR_SUCCESS;
+        LocalFree(acl);
+    }
+    FreeSid(user);
+    return ok;
 }
 
 struct DelStats {
@@ -629,13 +748,19 @@ static void delete_tree(const std::wstring& raw, DelStats& st, int depth) {
         if (RemoveDirectoryW(p.c_str())) {
             st.deleted++;
         } else {
-            // One more attempt after taking ownership.
+            // One more attempt after taking ownership. Restore the original
+            // security on failure: a failed delete must not leave the folder
+            // more open than it was.
+            SavedSecurity saved;
+            bool have = save_security(raw, saved);
             take_ownership(raw);
             clear_readonly(p);
-            if (RemoveDirectoryW(p.c_str())) st.deleted++;
-            else {
+            if (RemoveDirectoryW(p.c_str())) {
+                st.deleted++;
+            } else {
+                if (have) restore_security(raw, saved);
                 st.failed++;
-                if (st.first_error.empty()) st.first_error = raw + L" (dir, err " + std::to_wstring(GetLastError()) + L")";
+                if (st.first_error.empty()) st.first_error = raw + L" (dir)";
             }
         }
     } else {
@@ -643,21 +768,23 @@ static void delete_tree(const std::wstring& raw, DelStats& st, int depth) {
         if (DeleteFileW(p.c_str())) {
             st.deleted++;
         } else {
+            SavedSecurity saved;
+            bool have = save_security(raw, saved);
             take_ownership(raw);
             clear_readonly(p);
             if (DeleteFileW(p.c_str())) {
                 st.deleted++;
             } else {
+                if (have) restore_security(raw, saved);
                 st.failed++;
-                if (st.first_error.empty()) st.first_error = raw + L" (file, err " + std::to_wstring(GetLastError()) + L")";
+                if (st.first_error.empty()) st.first_error = raw + L" (file)";
             }
         }
     }
 }
 
 // Force-delete a path recursively. Returns 0 when everything was removed.
-int as_force_delete(const wchar_t* path, int* deleted, int* failed, wchar_t* log, int logcap) {
-    if (!path) return ERROR_INVALID_PARAMETER;
+int as_force_delete(const wchar_t* path, int* deleted, int* failed, wchar_t* log, int logcap) {    if (!path) return ERROR_INVALID_PARAMETER;
     enable_privilege(L"SeTakeOwnershipPrivilege");
     enable_privilege(L"SeRestorePrivilege");
     enable_privilege(L"SeBackupPrivilege");
@@ -669,6 +796,67 @@ int as_force_delete(const wchar_t* path, int* deleted, int* failed, wchar_t* log
     if (failed) *failed = st.failed;
     if (log) copy_w(st.first_error, log, logcap);
     return st.failed == 0 ? 0 : 1;
+}
+
+// Self-test only: does the DACL on `path` allow Everyone full control? Returns
+// 1 if it does (which is what issue #5 forbids), 0 if it does not, -1 on error.
+int as_grants_everyone_full_control(const wchar_t* path) {
+    if (!path) return -1;
+    PSID everyone = nullptr;
+    SID_IDENTIFIER_AUTHORITY world = SECURITY_WORLD_SID_AUTHORITY;
+    if (!AllocateAndInitializeSid(&world, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, &everyone)) return -1;
+    PACL dacl = nullptr;
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    DWORD rc = GetNamedSecurityInfoW((LPWSTR)long_path(path).c_str(), SE_FILE_OBJECT,
+                                     DACL_SECURITY_INFORMATION, nullptr, nullptr, &dacl, nullptr, &sd);
+    if (rc != ERROR_SUCCESS) {
+        FreeSid(everyone);
+        return -1;
+    }
+    BOOL present = FALSE, defaulted = FALSE;
+    PACL actual = nullptr;
+    int verdict = 0;
+    if (GetSecurityDescriptorDacl(sd, &present, &actual, &defaulted) && present && actual) {
+        for (WORD i = 0; i < actual->AceCount; i++) {
+            LPVOID ace = nullptr;
+            if (!GetAce(actual, i, &ace)) continue;
+            if (((ACE_HEADER*)ace)->AceType != ACCESS_ALLOWED_ACE_TYPE) continue;
+            auto* a = (ACCESS_ALLOWED_ACE*)ace;
+            if (EqualSid((PSID)&a->SidStart, everyone) && (a->Mask & FILE_ALL_ACCESS) == FILE_ALL_ACCESS) {
+                verdict = 1;
+                break;
+            }
+        }
+    }
+    LocalFree(sd);
+    FreeSid(everyone);
+    return verdict;
+}
+
+// Self-test only: plant an Everyone-full-control ACE, so the detector above can
+// be proven to work. Returns 0 on success.
+int as_grant_everyone_full_control(const wchar_t* path) {
+    if (!path) return ERROR_INVALID_PARAMETER;
+    PSID everyone = nullptr;
+    SID_IDENTIFIER_AUTHORITY world = SECURITY_WORLD_SID_AUTHORITY;
+    if (!AllocateAndInitializeSid(&world, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, &everyone))
+        return (int)GetLastError();
+    EXPLICIT_ACCESSW ea{};
+    ea.grfAccessPermissions = FILE_ALL_ACCESS;
+    ea.grfAccessMode = SET_ACCESS;
+    ea.grfInheritance = NO_INHERITANCE;
+    ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    ea.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+    ea.Trustee.ptstrName = (LPWSTR)everyone;
+    PACL acl = nullptr;
+    DWORD rc = SetEntriesInAclW(1, &ea, nullptr, &acl);
+    if (rc == ERROR_SUCCESS && acl) {
+        rc = SetNamedSecurityInfoW((LPWSTR)long_path(path).c_str(), SE_FILE_OBJECT,
+                                   DACL_SECURITY_INFORMATION, nullptr, nullptr, acl, nullptr);
+        LocalFree(acl);
+    }
+    FreeSid(everyone);
+    return (int)rc;
 }
 
 int as_path_exists(const wchar_t* path) {

@@ -56,6 +56,8 @@ extern "C" {
 
     fn as_count_processes_in_path(path: *const u16) -> i32;
     fn as_kill_processes_in_path(path: *const u16) -> i32;
+    fn as_path_is_under(folder: *const u16, candidate: *const u16) -> i32;
+    fn as_command_executable(cmd: *const u16, out: *mut u16, cap: i32) -> i32;
     fn as_list_services_under(path: *const u16, out: *mut u16, cap: i32) -> i32;
     fn as_stop_delete_service(name: *const u16) -> i32;
 
@@ -67,6 +69,8 @@ extern "C" {
         logcap: i32,
     ) -> i32;
     fn as_path_exists(path: *const u16) -> i32;
+    fn as_grants_everyone_full_control(path: *const u16) -> i32;
+    fn as_grant_everyone_full_control(path: *const u16) -> i32;
     fn as_delete_on_reboot(path: *const u16) -> i32;
     fn as_create_restore_point(desc: *const u16) -> i32;
     fn as_delete_scheduled_task(name: *const u16) -> i32;
@@ -263,6 +267,22 @@ pub fn kill_processes_in(path: &str) -> i32 {
     unsafe { as_kill_processes_in_path(w.as_ptr()) }
 }
 
+/// Is `candidate` the folder itself or a file inside it? Same rule the helper
+/// uses before it counts or kills a process.
+pub fn path_is_under(folder: &str, candidate: &str) -> bool {
+    let f = wide(folder);
+    let c = wide(candidate);
+    unsafe { as_path_is_under(f.as_ptr(), c.as_ptr()) != 0 }
+}
+
+pub fn command_executable(cmd: &str) -> String {
+    let w = wide(cmd);
+    take_string(
+        |out, cap| unsafe { as_command_executable(w.as_ptr(), out, cap) },
+        1024,
+    )
+}
+
 pub fn services_under(path: &str) -> Vec<String> {
     let s = take_string(
         |out, cap| unsafe {
@@ -324,6 +344,20 @@ pub fn force_delete(path: &str) -> DeleteReport {
     }
 }
 
+/// Self-test helper: 1 when the object's DACL still grants Everyone full
+/// control, 0 when it does not, -1 when it could not be read.
+pub fn grants_everyone_full_control(path: &str) -> i32 {
+    let w = wide(path);
+    unsafe { as_grants_everyone_full_control(w.as_ptr()) }
+}
+
+/// Self-test only: plant an Everyone-full-control ACE so the detector above can
+/// be proven to work.
+pub fn grant_everyone_full_control(path: &str) -> i32 {
+    let w = wide(path);
+    unsafe { as_grant_everyone_full_control(w.as_ptr()) }
+}
+
 pub fn path_exists(path: &str) -> bool {
     let w = wide(path);
     unsafe { as_path_exists(w.as_ptr()) != 0 }
@@ -365,5 +399,44 @@ mod tests {
         assert_eq!(wide("ا"), vec![0x0627, 0]);
         // Non-BMP characters must become a surrogate pair, not be dropped.
         assert_eq!(wide("😀"), vec![0xD83D, 0xDE00, 0]);
+    }
+
+    #[test]
+    fn a_process_inside_a_sibling_folder_is_not_related() {
+        // Issue #4: a prefix test made "C:\\Apps\\Foo" claim "C:\\Apps\\Foobar".
+        assert!(path_is_under("C:\\Apps\\Foo", "C:\\Apps\\Foo\\app.exe"));
+        assert!(path_is_under("C:\\Apps\\Foo", "C:\\Apps\\Foo"));
+        assert!(path_is_under("C:\\Apps\\Foo\\", "C:\\Apps\\Foo\\app.exe"));
+        assert!(path_is_under("c:\\apps\\foo", "C:\\Apps\\Foo\\App.EXE"));
+        assert!(!path_is_under(
+            "C:\\Apps\\Foo",
+            "C:\\Apps\\Foobar\\other.exe"
+        ));
+        assert!(!path_is_under("C:\\Apps\\Foo", "C:\\Apps\\Foo2"));
+        assert!(!path_is_under("C:\\Apps\\Foo", "C:\\Apps\\Fo"));
+        assert!(!path_is_under("C:\\Apps\\Foo", "D:\\Tools\\Foo\\a.exe"));
+        assert!(!path_is_under("C:\\Apps\\Foo", ""));
+    }
+
+    #[test]
+    fn a_service_command_line_resolves_to_its_executable() {
+        // Issue #4: matching the whole command line let an argument that names
+        // the folder pull an unrelated service into the delete plan.
+        assert_eq!(
+            command_executable("\"C:\\Apps\\Foo\\foo.exe\" --service"),
+            "C:\\Apps\\Foo\\foo.exe"
+        );
+        assert_eq!(
+            command_executable("C:\\Apps\\Foo\\foo.exe -k netsvcs"),
+            "C:\\Apps\\Foo\\foo.exe"
+        );
+        assert_eq!(
+            command_executable("\"C:\\Program Files\\Foo Bar\\a b.exe\" /run"),
+            "C:\\Program Files\\Foo Bar\\a b.exe"
+        );
+        assert_eq!(
+            command_executable("C:\\Apps\\Foobar\\other.exe -c \"C:\\Apps\\Foo\""),
+            "C:\\Apps\\Foobar\\other.exe"
+        );
     }
 }
