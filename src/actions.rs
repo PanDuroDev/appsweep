@@ -481,6 +481,28 @@ fn cleanup_blocked_by_resource_discovery(flow: Flow, inventory_unknown: bool) ->
 }
 
 pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bool) -> Vec<Step> {
+    build_plan_with_discovery(
+        app,
+        flow,
+        settings,
+        keep_data,
+        |path| crate::native::services_under(path),
+        |path| crate::native::tasks_under(path),
+    )
+}
+
+fn build_plan_with_discovery<S, T>(
+    app: &AppEntry,
+    flow: Flow,
+    settings: &Settings,
+    keep_data: bool,
+    discover_services: S,
+    discover_tasks: T,
+) -> Vec<Step>
+where
+    S: FnOnce(&str) -> Option<Vec<String>>,
+    T: FnOnce(&str) -> Option<Vec<String>>,
+{
     let mut steps: Vec<Step> = Vec::new();
     let mut add = |title: &str, detail: &str, op: Op, skip_if_gone: bool, optional: bool| {
         steps.push(Step {
@@ -567,7 +589,7 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
         Vec::new()
     } else {
         match &dir {
-            Some(d) => match crate::native::services_under(&s(d)) {
+            Some(d) => match discover_services(&s(d)) {
                 Some(found) => found,
                 None => {
                     services_unknown = true;
@@ -592,7 +614,7 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
         Vec::new()
     } else {
         match &dir {
-            Some(d) => match crate::native::tasks_under(&s(d)) {
+            Some(d) => match discover_tasks(&s(d)) {
                 Some(found) => found,
                 None => {
                     tasks_unknown = true;
@@ -2340,6 +2362,19 @@ mod tests {
         a
     }
 
+    fn build_plan_for_test(
+        app: &AppEntry,
+        flow: Flow,
+        settings: &Settings,
+        keep_data: bool,
+    ) -> Vec<Step> {
+        // Plan tests must not depend on which Windows services or tasks happen
+        // to be installed on the CI runner.
+        build_plan_with_discovery(app, flow, settings, keep_data, |_| Some(Vec::new()), |_| {
+            Some(Vec::new())
+        })
+    }
+
     fn any_op(steps: &[Step], f: impl Fn(&Op) -> bool) -> bool {
         steps.iter().any(|s| f(&s.op))
     }
@@ -2436,7 +2471,7 @@ mod tests {
     #[test]
     fn files_only_touches_the_folder() {
         let a = app("Demo", "D:\\Apps\\Demo");
-        let steps = build_plan(&a, Flow::FilesOnly, &Settings::default(), true);
+        let steps = build_plan_for_test(&a, Flow::FilesOnly, &Settings::default(), true);
         assert!(any_op(&steps, |o| matches!(o, Op::Recycle { .. })));
         assert!(any_op(&steps, |o| matches!(o, Op::ForceDelete { .. })));
         assert!(any_op(&steps, |o| matches!(o, Op::Verify { .. })));
@@ -2451,7 +2486,7 @@ mod tests {
         let mut a = app("Demo", "D:\\Apps\\Demo");
         a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
         a.shortcuts = vec![PathBuf::from("D:\\Start\\Demo.lnk")];
-        let steps = build_plan(&a, Flow::FilesOnly, &Settings::default(), true);
+        let steps = build_plan_for_test(&a, Flow::FilesOnly, &Settings::default(), true);
         let v = steps
             .iter()
             .find_map(|s| match &s.op {
@@ -2468,7 +2503,7 @@ mod tests {
         let mut a = app("Demo", "D:\\Apps\\Demo");
         a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
         for flow in [Flow::Uninstall, Flow::Purge, Flow::FilesOnly] {
-            let steps = build_plan(&a, flow, &Settings::default(), true);
+            let steps = build_plan_for_test(&a, flow, &Settings::default(), true);
             let verifies: Vec<&Step> = steps
                 .iter()
                 .filter(|s| matches!(s.op, Op::Verify { .. }))
@@ -2496,7 +2531,7 @@ mod tests {
     fn purge_verifies_the_registry_it_removed() {
         let mut a = app("Demo", "D:\\Apps\\Demo");
         a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
-        let steps = build_plan(&a, Flow::Purge, &Settings::default(), true);
+        let steps = build_plan_for_test(&a, Flow::Purge, &Settings::default(), true);
         let reg = steps.iter().find_map(|s| match &s.op {
             Op::Verify { reg, .. } => Some(reg.clone()),
             _ => None,
@@ -2541,6 +2576,47 @@ mod tests {
     }
 
     #[test]
+    fn incomplete_service_or_task_inventory_blocks_destructive_plans() {
+        let a = app("Demo", "D:\\Apps\\Demo");
+        let settings = Settings::default();
+        let services_unknown = build_plan_with_discovery(
+            &a,
+            Flow::Purge,
+            &settings,
+            true,
+            |_| None,
+            |_| Some(Vec::new()),
+        );
+        assert_eq!(services_unknown.len(), 1);
+        assert_eq!(services_unknown[0].title, "Cleanup cancelled");
+
+        let tasks_unknown = build_plan_with_discovery(
+            &a,
+            Flow::Uninstall,
+            &settings,
+            true,
+            |_| Some(Vec::new()),
+            |_| None,
+        );
+        assert_eq!(tasks_unknown.len(), 1);
+        assert_eq!(tasks_unknown[0].title, "Cleanup cancelled");
+    }
+
+    #[test]
+    fn files_only_does_not_query_services_or_tasks() {
+        let a = app("Demo", "D:\\Apps\\Demo");
+        let steps = build_plan_with_discovery(
+            &a,
+            Flow::FilesOnly,
+            &Settings::default(),
+            true,
+            |_| panic!("FilesOnly must not enumerate services"),
+            |_| panic!("FilesOnly must not enumerate scheduled tasks"),
+        );
+        assert!(any_op(&steps, |op| matches!(op, Op::ForceDelete { .. })));
+    }
+
+    #[test]
     fn incomplete_task_discovery_blocks_destructive_flows() {
         assert!(cleanup_blocked_by_resource_discovery(Flow::Uninstall, true));
         assert!(cleanup_blocked_by_resource_discovery(Flow::Purge, true));
@@ -2566,7 +2642,7 @@ mod tests {
         let mut a = app("Demo", "D:\\Apps\\Demo");
         a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
         a.shortcuts = vec![PathBuf::from("D:\\Start\\Demo.lnk")];
-        let steps = build_plan(&a, Flow::Purge, &Settings::default(), true);
+        let steps = build_plan_for_test(&a, Flow::Purge, &Settings::default(), true);
         assert!(any_op(
             &steps,
             |o| matches!(o, Op::DeleteReg { keys } if !keys.is_empty())
@@ -2583,7 +2659,7 @@ mod tests {
     fn a_backup_is_taken_before_any_registry_deletion() {
         let mut a = app("Demo", "D:\\Apps\\Demo");
         a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
-        let steps = build_plan(&a, Flow::Purge, &Settings::default(), true);
+        let steps = build_plan_for_test(&a, Flow::Purge, &Settings::default(), true);
         let backup = steps
             .iter()
             .position(|s| matches!(s.op, Op::BackupRegistry { .. }));
@@ -2605,7 +2681,7 @@ mod tests {
         ] {
             let a = app(name, dir);
             for flow in [Flow::Uninstall, Flow::Purge, Flow::FilesOnly] {
-                let steps = build_plan(&a, flow, &Settings::default(), true);
+                let steps = build_plan_for_test(&a, flow, &Settings::default(), true);
                 for s in &steps {
                     let paths: Vec<&String> = match &s.op {
                         Op::ForceDelete { paths }
