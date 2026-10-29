@@ -449,6 +449,7 @@ struct PersistFileVTable {
 extern "system" {
     fn GetCurrentProcess() -> Handle;
     fn GetCurrentProcessId() -> u32;
+    fn GetSystemDirectoryW(buffer: *mut u16, size: u32) -> u32;
     fn GetLastError() -> u32;
     fn CloseHandle(handle: Handle) -> Bool;
     fn WaitForSingleObject(handle: Handle, milliseconds: u32) -> u32;
@@ -1709,8 +1710,8 @@ fn process_image_path(process: Handle) -> Option<String> {
 fn is_protected_or_unsupported_path(path: &str) -> bool {
     let trimmed = path.trim();
     if trimmed.is_empty()
-        || trimmed.starts_with(r"\\?\\")
-        || trimmed.starts_with(r"\\.\\")
+        || trimmed.starts_with(r"\\?\")
+        || trimmed.starts_with(r"\\.\")
     {
         return true;
     }
@@ -2328,7 +2329,7 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
         // while read_dir and recursive calls use the same path. This blocks
         // junction/rename swaps during traversal; failure is fail-closed.
         let mut listing = std::fs::read_dir(path);
-        if matches!(listing, Err(ref e) if e.kind() == std::io::ErrorKind::PermissionDenied) {
+        if matches!(&listing, Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied) {
             if early_snapshot.is_none() {
                 early_snapshot = acl_snapshot_and_relax(path);
             }
@@ -2810,9 +2811,22 @@ pub fn delete_scheduled_task(name: &str) -> i32 {
 }
 
 fn capture_command_oem(program: &str, arguments: &[&str]) -> Option<String> {
+    // Resolve the administrative utility from System32 explicitly; CreateProcessW's
+    // NULL application-name search order checks the application/current directories first.
+    let mut system_dir = vec![0u16; 32_768];
+    let system_dir_len = unsafe {
+        GetSystemDirectoryW(system_dir.as_mut_ptr(), system_dir.len() as u32)
+    } as usize;
+    if system_dir_len == 0 || system_dir_len >= system_dir.len() {
+        return None;
+    }
+    system_dir.truncate(system_dir_len);
+    let system_dir = String::from_utf16_lossy(&system_dir);
+    let program_path = format!("{}\\{}", system_dir.trim_end_matches(['\\', '/']), program);
+
     // Quote every token according to CreateProcessW rules and reuse the bounded
     // pipe reader. A launch failure, timeout, or non-zero exit is not an empty list.
-    let command_line = std::iter::once(program)
+    let command_line = std::iter::once(program_path.as_str())
         .chain(arguments.iter().copied())
         .map(quote_windows_argument)
         .collect::<Vec<_>>()
