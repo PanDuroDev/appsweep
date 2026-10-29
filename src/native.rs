@@ -2022,13 +2022,13 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
         match std::fs::remove_dir(path) {
             Ok(()) => stats.deleted += 1,
             Err(_) => {
-                if let Some(snapshot) = acl_snapshot_and_relax(path) {
-                    clear_readonly(path);
-                    if std::fs::remove_dir(path).is_ok() {
-                        stats.deleted += 1;
-                        drop(snapshot);
-                        return;
-                    }
+                let snapshot = acl_snapshot_and_relax(path);
+                clear_readonly(path);
+                if std::fs::remove_dir(path).is_ok() {
+                    stats.deleted += 1;
+                    return;
+                }
+                if let Some(snapshot) = snapshot {
                     restore_acl_snapshot(path, &snapshot);
                 }
                 stats.failed += 1;
@@ -2042,13 +2042,13 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
         match std::fs::remove_file(path) {
             Ok(()) => stats.deleted += 1,
             Err(_) => {
-                if let Some(snapshot) = acl_snapshot_and_relax(path) {
-                    clear_readonly(path);
-                    if std::fs::remove_file(path).is_ok() {
-                        stats.deleted += 1;
-                        drop(snapshot);
-                        return;
-                    }
+                let snapshot = acl_snapshot_and_relax(path);
+                clear_readonly(path);
+                if std::fs::remove_file(path).is_ok() {
+                    stats.deleted += 1;
+                    return;
+                }
+                if let Some(snapshot) = snapshot {
                     restore_acl_snapshot(path, &snapshot);
                 }
                 stats.failed += 1;
