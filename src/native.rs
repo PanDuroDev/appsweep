@@ -1546,6 +1546,7 @@ fn capture_process_output(command_line: &str) -> Option<(Vec<u8>, u32)> {
     let mut pipe_open = true;
     let mut timed_out = false;
     let mut truncated = false;
+    let mut capture_failed = false;
 
     loop {
         if Instant::now() >= deadline {
@@ -1570,6 +1571,12 @@ fn capture_process_output(command_line: &str) -> Option<(Vec<u8>, u32)> {
                 )
             };
             if peeked == 0 {
+                let error = unsafe { GetLastError() };
+                // ERROR_BROKEN_PIPE means all writers closed and the buffered
+                // output has been drained; other errors make completeness unknown.
+                if error != 109 {
+                    capture_failed = true;
+                }
                 pipe_open = false;
             } else if available > 0 {
                 let request = available.min(chunk.len() as u32);
@@ -1584,6 +1591,7 @@ fn capture_process_output(command_line: &str) -> Option<(Vec<u8>, u32)> {
                     )
                 };
                 if read_ok == 0 || received == 0 {
+                    capture_failed = true;
                     pipe_open = false;
                 } else if data.len() < OUTPUT_LIMIT {
                     let retain = (OUTPUT_LIMIT - data.len()).min(received as usize);
@@ -1625,7 +1633,7 @@ fn capture_process_output(command_line: &str) -> Option<(Vec<u8>, u32)> {
     }
     // A truncated output can look like a complete scheduled-task listing, which
     // could let cleanup delete the installation while leaving tasks behind.
-    if timed_out || !exited || truncated {
+    if timed_out || !exited || truncated || capture_failed {
         None
     } else {
         Some((data, exit_code))
