@@ -1589,14 +1589,16 @@ pub fn services_under(path: &str) -> Vec<String> {
             &mut resume,
             null(),
         );
-        let mut buffer = vec![0u8; (needed as usize).max(4096)];
+        let buffer_bytes = (needed as usize).max(4096);
+        let mut buffer = vec![0u64; buffer_bytes.div_ceil(size_of::<u64>())];
+        let allocated_bytes = buffer.len() * size_of::<u64>();
         let ok = EnumServicesStatusExW(
             manager,
             SC_ENUM_PROCESS_INFO,
             SERVICE_WIN32,
             SERVICE_STATE_ALL,
-            buffer.as_mut_ptr(),
-            buffer.len().min(u32::MAX as usize) as u32,
+            buffer.as_mut_ptr() as *mut u8,
+            allocated_bytes.min(u32::MAX as usize) as u32,
             &mut needed,
             &mut returned,
             &mut resume,
@@ -1621,16 +1623,19 @@ pub fn services_under(path: &str) -> Vec<String> {
                 let mut config_needed = 0u32;
                 let _ = QueryServiceConfigW(service, null_mut(), 0, &mut config_needed);
                 if config_needed > 0 {
-                    let mut config_buffer = vec![0u8; config_needed as usize];
+                    let mut config_buffer =
+                        vec![0u64; (config_needed as usize).div_ceil(size_of::<u64>())];
+                    let config_bytes = config_buffer.len() * size_of::<u64>();
                     if QueryServiceConfigW(
                         service,
                         config_buffer.as_mut_ptr() as *mut QueryServiceConfigW,
-                        config_buffer.len().min(u32::MAX as usize) as u32,
+                        config_bytes.min(u32::MAX as usize) as u32,
                         &mut config_needed,
                     ) != 0
                     {
                         let config = &*(config_buffer.as_ptr() as *const QueryServiceConfigW);
-                        let executable = command_executable(wide_ptr_to_string(config.binary_path_name as *const u16).as_str());
+                        let binary_path = wide_ptr_to_string(config.binary_path_name as *const u16);
+                        let executable = command_executable(&binary_path);
                         if path_is_under(path, &executable) {
                             names.push(wide_ptr_to_string(item.service_name));
                         }
