@@ -915,6 +915,13 @@ pub struct PurgeResult {
     pub log: Vec<String>,
 }
 
+impl PurgeResult {
+    fn record_removed(&mut self, message: String) {
+        self.deleted = self.deleted.saturating_add(1);
+        self.log.push(message);
+    }
+}
+
 #[cfg(windows)]
 fn create_locked_plan_file(path: &Path) -> std::io::Result<std::fs::File> {
     // Keep the writer open across the UAC handoff. Share-read allows the
@@ -1120,7 +1127,7 @@ pub fn run_plan_file(path: &str, expected_user_sid: &str) -> i32 {
     for name in &plan.services {
         let rc = crate::native::stop_delete_service(name);
         if rc == 0 {
-            res.log.push(format!("service removed: {}", name));
+            res.record_removed(format!("service removed: {}", name));
         } else {
             // Counted like every other failure: the caller reports `failed`
             // back to the user, so a swallowed code would read as success.
@@ -1132,7 +1139,7 @@ pub fn run_plan_file(path: &str, expected_user_sid: &str) -> i32 {
     for task in &plan.tasks {
         let rc = crate::native::delete_scheduled_task(task);
         if rc == 0 {
-            res.log.push(format!("task removed: {}", task));
+            res.record_removed(format!("task removed: {}", task));
         } else {
             res.failed += 1;
             res.log.push(format!("task failed: {} (code {})", task, rc));
@@ -1145,7 +1152,7 @@ pub fn run_plan_file(path: &str, expected_user_sid: &str) -> i32 {
             _ => RegRoot::Hkcu,
         };
         match delete_reg_key(root, &key.1) {
-            Ok(_) => res.log.push(format!("registry removed: {}", key.1)),
+            Ok(_) => res.record_removed(format!("registry removed: {}", key.1)),
             Err(e) => {
                 res.failed += 1;
                 res.log.push(format!("registry failed: {} ({})", key.1, e));
@@ -1172,12 +1179,12 @@ pub fn run_plan_file(path: &str, expected_user_sid: &str) -> i32 {
             continue;
         }
         let r = crate::native::force_delete(sc);
+        res.deleted += r.deleted.max(0) as u32;
         if r.failed > 0 {
-            res.failed += 1;
+            res.failed += r.failed.max(0) as u32;
             res.log
                 .push(format!("shortcut failed: {} ({})", sc, r.first_error));
         } else {
-            res.deleted += r.deleted.max(0) as u32;
             res.log.push(format!("shortcut removed: {}", sc));
         }
     }
@@ -2351,6 +2358,17 @@ mod tests {
         assert!(matches!(status, StepStatus::Warn));
         // Nothing to do is not a failure.
         assert!(matches!(partial(0, 0, "x:").0, StepStatus::Ok));
+    }
+
+    #[test]
+    fn elevated_result_counts_successful_non_file_resources() {
+        let mut result = PurgeResult::default();
+        result.record_removed("service removed: DemoService".into());
+        result.record_removed("task removed: \\Demo\\Task".into());
+        result.record_removed("registry removed: Software\\Demo".into());
+        assert_eq!(result.deleted, 3);
+        assert_eq!(result.failed, 0);
+        assert_eq!(result.log.len(), 3);
     }
 
     #[test]
