@@ -1822,10 +1822,10 @@ impl Runner {
 
 pub fn spawn(app: AppEntry, flow: Flow, settings: Settings, keep_data: bool) -> Job {
     let steps = build_plan(&app, flow, &settings, keep_data);
-    spawn_with_steps(app, settings, steps)
+    spawn_with_steps(app, flow, settings, steps)
 }
 
-fn spawn_with_steps(app: AppEntry, settings: Settings, steps: Vec<Step>) -> Job {
+fn spawn_with_steps(app: AppEntry, flow: Flow, settings: Settings, steps: Vec<Step>) -> Job {
     let (tx, rx) = channel();
     let app_id = app.id;
     let app_name = app.name.clone();
@@ -2127,7 +2127,7 @@ pub fn selftest() -> i32 {
         |_| Some(Vec::new()),
         |_| Some(Vec::new()),
     );
-    let mut job = spawn_with_steps(app, settings, steps);
+    let mut job = spawn_with_steps(app, Flow::Purge, settings, steps);
     let mut last = usize::MAX;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
