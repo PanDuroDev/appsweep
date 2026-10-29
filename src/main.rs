@@ -13,8 +13,19 @@ mod userdata;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if let Some(pos) = args.iter().position(|a| a == "--plan") {
-        if let Some(path) = args.get(pos + 1) {
-            std::process::exit(actions::run_plan_file(path));
+        let path = args.get(pos + 1);
+        let sid = args
+            .iter()
+            .position(|arg| arg == "--plan-user-sid")
+            .and_then(|sid_pos| args.get(sid_pos + 1));
+        match (path, sid) {
+            (Some(path), Some(sid)) => {
+                std::process::exit(actions::run_plan_file(path, sid));
+            }
+            _ => {
+                eprintln!("Rejected elevated plan: missing path or caller SID");
+                std::process::exit(4);
+            }
         }
     }
     if args.iter().any(|a| a == "--version") {
@@ -44,7 +55,7 @@ fn main() {
             None => {
                 eprintln!("count: unknown (schtasks could not be read)");
                 std::process::exit(1);
-            },
+            }
         }
         return;
     }
@@ -78,7 +89,9 @@ fn main() {
     // eframe initializes COM even when restore points are currently disabled.
     let restore_com_security_ready = native::initialize_restore_point_com_security();
     if settings.create_restore_point && !restore_com_security_ready {
-        eprintln!("System Restore COM security initialization failed; restore-point creation will be reported as unavailable.");
+        eprintln!(
+            "System Restore COM security initialization failed; restore-point creation will be reported as unavailable."
+        );
     }
 
     let options = eframe::NativeOptions {
