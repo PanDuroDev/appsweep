@@ -1,7 +1,7 @@
 # AGENTS.md
 
-AppSweep is a Windows app manager and deep uninstaller: Rust + egui, plus one
-C++ helper (`native/helper.cpp`), shipped as a single `.exe`. Windows 10 first.
+AppSweep is a Windows app manager and deep uninstaller: Rust + egui, with direct
+Win32 integration in Rust, shipped as a single `.exe`. Windows 10 first.
 
 This file is the contract for every agent that works in this repository,
 human-directed or automatic. Each agent has its own file in `.github/ai/`.
