@@ -1399,6 +1399,19 @@ fn resolve_program_path(program: &str) -> Result<String, i32> {
                 return Ok(path);
             }
         }
+        // Windows PowerShell ships in a trusted System32 subdirectory rather
+        // than directly in System32. Resolve it explicitly so UWP cleanup still
+        // works when AppSweep itself runs elevated; never fall back to a
+        // user-writable WindowsApps/PATH shim in an elevated process.
+        if name.eq_ignore_ascii_case("powershell")
+            || name.eq_ignore_ascii_case("powershell.exe")
+        {
+            if let Ok(path) = system_program_path(r"WindowsPowerShell\v1.0\powershell.exe") {
+                if Path::new(&path).is_file() {
+                    return Ok(path);
+                }
+            }
+        }
     }
 
     // Searching PATH while elevated can execute a binary from a
@@ -3993,6 +4006,16 @@ mod tests {
                 .to_ascii_lowercase(),
             "where.exe"
         );
+    }
+
+    #[test]
+    fn powershell_resolves_from_the_trusted_system32_subdirectory() {
+        let executable = resolve_program_path("powershell")
+            .expect("Windows PowerShell should resolve without PATH lookup");
+        assert!(Path::new(&executable).is_file());
+        assert!(executable
+            .to_ascii_lowercase()
+            .ends_with(r"windowspowershell\v1.0\powershell.exe"));
     }
 
     #[test]
