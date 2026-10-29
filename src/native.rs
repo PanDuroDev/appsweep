@@ -3782,7 +3782,9 @@ mod tests {
         ]
         .join("\r\n");
         let names = parse_task_names(&listing).unwrap();
-        assert!(names.iter().any(|name| name.eq_ignore_ascii_case(r"\Demo\One")));
+        assert!(names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(r"\Demo\One")));
         assert!(names.iter().any(|name| name == r"\Demo\Two, with comma"));
         assert_eq!(parse_task_names(""), None);
         assert_eq!(parse_task_names(r#""host","incomplete""#), None);
