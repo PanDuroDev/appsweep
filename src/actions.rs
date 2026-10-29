@@ -112,7 +112,21 @@ impl Job {
 
     fn mark_done(&mut self) {
         self.done = true;
-        self.success = !self.steps.iter().any(|s| s.status == StepStatus::Fail);
+        // Anything still marked Running never reported back.
+        for s in self.steps.iter_mut() {
+            if s.status == StepStatus::Running || s.status == StepStatus::Pending {
+                s.status = StepStatus::Fail;
+                if s.detail.is_empty() {
+                    s.detail = "Step stopped without a result".into();
+                }
+            }
+        }
+        // Recomputed after the sweep: a step that stopped without a result is
+        // a failure, and the counts would otherwise miss it.
+        self.success = self
+            .steps
+            .iter()
+            .all(|s| matches!(s.status, StepStatus::Ok | StepStatus::Skip));
         let (ok, warn, fail) = self.steps.iter().fold((0, 0, 0), |mut acc, s| {
             match s.status {
                 StepStatus::Ok => acc.0 += 1,
@@ -123,15 +137,6 @@ impl Job {
             acc
         });
         self.summary = format!("{} ok / {} warnings / {} failed", ok, warn, fail);
-        // Anything still marked Running never reported back.
-        for s in self.steps.iter_mut() {
-            if s.status == StepStatus::Running || s.status == StepStatus::Pending {
-                s.status = StepStatus::Fail;
-                if s.detail.is_empty() {
-                    s.detail = "Step stopped without a result".into();
-                }
-            }
-        }
     }
 
     pub fn progress(&self) -> (usize, usize) {
@@ -1817,5 +1822,53 @@ mod tests {
     fn backup_timestamps_are_readable_utc() {
         let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
         assert_eq!(format_time(t), "2023-11-14 22:13");
+    }
+
+    /// A finished job with the given statuses, without spawning anything.
+    fn job_with(statuses: &[StepStatus]) -> Job {
+        let statuses: Vec<StepStatus> = statuses.to_vec();
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let steps = statuses
+            .iter()
+            .map(|st| Step {
+                title: String::new(),
+                detail: String::new(),
+                op: Op::Nothing,
+                status: st.clone(),
+                skip_if_gone: false,
+                optional: false,
+            })
+            .collect();
+        let mut job = Job {
+            app_id: 1,
+            app_name: "Demo".into(),
+            flow: Flow::Purge,
+            steps,
+            done: false,
+            summary: String::new(),
+            success: false,
+            rx,
+        };
+        job.mark_done();
+        job
+    }
+
+    #[test]
+    fn warnings_are_not_a_clean_success() {
+        use StepStatus::*;
+        assert!(job_with(&[Ok, Skip, Ok]).success);
+        // A refused task delete only produces a warning, so this was reported
+        // as a full success before.
+        assert!(!job_with(&[Ok, Warn, Ok]).success);
+        assert!(!job_with(&[Ok, Fail]).success);
+    }
+
+    #[test]
+    fn a_step_that_never_reported_is_a_failure() {
+        use StepStatus::*;
+        let job = job_with(&[Ok, Running, Pending]);
+        assert!(!job.success);
+        assert!(job.steps[1].status == Fail && job.steps[2].status == Fail);
+        assert_eq!(job.summary, "1 ok / 0 warnings / 2 failed");
     }
 }

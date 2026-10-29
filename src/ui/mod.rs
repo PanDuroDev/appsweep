@@ -1052,12 +1052,17 @@ impl AppSweep {
             };
             match asked {
                 Asked::Close => {
-                    let success =
-                        job.done && !job.steps.iter().any(|s| s.status == StepStatus::Fail);
+                    // Read everything off `job` before `self.job` is cleared.
+                    let success = job.done && job.success;
+                    let failed = job.steps.iter().any(|s| s.status == StepStatus::Fail);
                     self.job = None;
                     self.cache.clear();
                     if success {
                         self.set_status("Operation completed successfully");
+                    } else if failed {
+                        self.set_status("Operation failed - see the steps");
+                    } else {
+                        self.set_status("Finished with warnings");
                     }
                     self.start_scan(ctx);
                 }

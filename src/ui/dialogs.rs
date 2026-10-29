@@ -600,11 +600,21 @@ pub fn job(ui: &mut Ui, p: &Palette, job: &Job) -> Asked {
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if job.done {
-                let ok = job.success;
-                let (col, bg, txt) = if ok {
+                let failed = job.steps.iter().any(|s| s.status == StepStatus::Fail);
+                let (col, bg, txt) = if job.success {
                     (p.ok, p.ok_soft, "Operation completed successfully")
+                } else if failed {
+                    (
+                        p.danger,
+                        p.danger_soft,
+                        "Operation failed - see the steps below",
+                    )
                 } else {
-                    (p.warn, p.warn_soft, "Operation finished with warnings")
+                    (
+                        p.warn,
+                        p.warn_soft,
+                        "Finished with warnings - some steps did not complete",
+                    )
                 };
                 // Banner behind the result so the outcome is unmistakable.
                 egui::Frame::NONE
