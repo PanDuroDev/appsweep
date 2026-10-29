@@ -1438,9 +1438,48 @@ fn resolve_program_path(program: &str) -> Result<String, i32> {
     Err(2) // ERROR_FILE_NOT_FOUND
 }
 
+fn command_line_executable_candidates(command_line: &str) -> Vec<String> {
+    let command_line = command_line.trim_start();
+    if command_line.is_empty() {
+        return Vec::new();
+    }
+
+    if let Some(quoted) = command_line.strip_prefix('"') {
+        if let Some(end) = quoted.find('"') {
+            return vec![quoted[..end].to_string()];
+        }
+    }
+
+    let mut candidates = Vec::new();
+    for (index, ch) in command_line.char_indices() {
+        if ch.is_whitespace() && index > 0 {
+            candidates.push(command_line[..index].to_string());
+        }
+    }
+    candidates.push(command_line.to_string());
+    candidates
+}
+
+fn resolve_command_application(command_line: &str) -> Result<String, i32> {
+    for candidate in command_line_executable_candidates(command_line) {
+        let mut executable_candidates = vec![candidate.clone()];
+        if Path::new(&candidate).extension().is_none() {
+            executable_candidates.push(format!("{}.exe", candidate));
+        }
+        for executable in executable_candidates {
+            let Ok(resolved) = resolve_program_path(&executable) else {
+                continue;
+            };
+            if Path::new(&resolved).is_file() {
+                return Ok(resolved);
+            }
+        }
+    }
+    Err(2) // ERROR_FILE_NOT_FOUND
+}
+
 pub fn run_cmd(command_line: &str, wait: bool) -> (i32, u32) {
-    let executable = command_executable(command_line);
-    let application = match resolve_program_path(&executable) {
+    let application = match resolve_command_application(command_line) {
         Ok(path) => path,
         Err(error) => return (error, 0),
     };
@@ -1607,8 +1646,7 @@ fn capture_process_output(command_line: &str) -> Option<(Vec<u8>, u32)> {
         }
     }
 
-    let executable = command_executable(command_line);
-    let application = match resolve_program_path(&executable) {
+    let application = match resolve_command_application(command_line) {
         Ok(path) => path,
         Err(_) => {
             unsafe {
@@ -3919,6 +3957,41 @@ mod tests {
                 .expect("the complete CSV inventory should parse")
                 .len(),
             70
+        );
+    }
+
+    #[test]
+    fn command_line_executable_candidates_preserve_quoted_paths_and_arguments() {
+        assert_eq!(
+            command_line_executable_candidates("where winget"),
+            vec!["where".to_string(), "where winget".to_string()]
+        );
+        assert_eq!(
+            command_line_executable_candidates(r#""C:\Program Files\Tool.exe" /S"#),
+            vec![r"C:\Program Files\Tool.exe".to_string()]
+        );
+        assert_eq!(
+            command_line_executable_candidates(r"C:\Program Files\Tool.exe /S"),
+            vec![
+                r"C:\Program".to_string(),
+                r"C:\Program Files\Tool.exe".to_string(),
+                r"C:\Program Files\Tool.exe /S".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn run_cmd_resolves_bare_windows_system_tools() {
+        let executable = resolve_command_application("where winget")
+            .expect("where.exe should be resolved from the Windows system directory");
+        assert!(Path::new(&executable).is_file());
+        assert_eq!(
+            Path::new(&executable)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_ascii_lowercase(),
+            "where.exe"
         );
     }
 
