@@ -413,6 +413,36 @@ fn winget_available() -> bool {
 
 // ---------------------------------------------------------------- plan building
 
+/// Targets whose absence is not confirmed. A probe that fails (access denied,
+/// locked volume) is not the same as a missing file, so those targets stay in
+/// the batch and surface as a failure instead of quietly becoming "nothing to
+/// do".
+fn present_or_unknown(paths: Vec<String>) -> (Vec<String>, u32) {
+    let mut keep = Vec::new();
+    let mut unknown = 0;
+    for path in paths {
+        match crate::native::path_state(&path) {
+            Some(false) => {}
+            Some(true) => keep.push(path),
+            None => {
+                unknown += 1;
+                keep.push(path);
+            }
+        }
+    }
+    (keep, unknown)
+}
+
+/// Named targets that could not be handled, capped so a long list still fits
+/// in one line.
+fn name_failures(what: &str, names: &[String]) -> String {
+    let mut shown: Vec<&str> = names.iter().take(3).map(|n| n.as_str()).collect();
+    if names.len() > 3 {
+        shown.push("...");
+    }
+    format!("{} failed: {}", what, shown.join(", "))
+}
+
 /// "Done" when nothing was left over, "Done N of M" when something was:
 /// a step is only a clean Ok when its whole job finished.
 fn partial(done: u32, total: u32, what: &str) -> (StepStatus, String) {
@@ -843,14 +873,25 @@ pub fn run_plan_file(path: &str) -> i32 {
     let mut res = PurgeResult::default();
 
     for name in &plan.services {
-        if crate::native::stop_delete_service(name) == 0 {
+        let rc = crate::native::stop_delete_service(name);
+        if rc == 0 {
             res.log.push(format!("service removed: {}", name));
         } else {
-            res.log.push(format!("service failed: {}", name));
+            // Counted like every other failure: the caller reports `failed`
+            // back to the user, so a swallowed code would read as success.
+            res.failed += 1;
+            res.log
+                .push(format!("service failed: {} (code {})", name, rc));
         }
     }
     for task in &plan.tasks {
-        let _ = crate::native::delete_scheduled_task(task);
+        let rc = crate::native::delete_scheduled_task(task);
+        if rc == 0 {
+            res.log.push(format!("task removed: {}", task));
+        } else {
+            res.failed += 1;
+            res.log.push(format!("task failed: {} (code {})", task, rc));
+        }
     }
     for key in &plan.delete_reg {
         let root = match key.0.as_str() {
@@ -880,7 +921,20 @@ pub fn run_plan_file(path: &str) -> i32 {
         }
     }
     for sc in &plan.shortcuts {
-        let _ = crate::native::force_delete(sc);
+        if crate::model::is_protected_dir(Path::new(sc)) {
+            res.failed += 1;
+            res.log.push(format!("blocked protected shortcut: {}", sc));
+            continue;
+        }
+        let r = crate::native::force_delete(sc);
+        if r.failed > 0 {
+            res.failed += 1;
+            res.log
+                .push(format!("shortcut failed: {} ({})", sc, r.first_error));
+        } else {
+            res.deleted += r.deleted.max(0) as u32;
+            res.log.push(format!("shortcut removed: {}", sc));
+        }
     }
 
     if let Ok(text) = serde_json::to_string_pretty(&res) {
@@ -1280,34 +1334,59 @@ impl Runner {
                 }
             }
             Op::DeleteShortcuts { paths } => {
-                let present: Vec<String> = safe_paths(paths.clone())
-                    .into_iter()
-                    .filter(|p| Path::new(p).exists())
-                    .collect();
-                if present.is_empty() {
+                let (present, unknown) = present_or_unknown(safe_paths(paths.clone()));
+                if present.is_empty() && unknown == 0 {
                     return (StepStatus::Skip, "No shortcuts left".into());
                 }
-                let mut n = 0;
+                let mut n = 0u32;
+                let mut failed: Vec<String> = Vec::new();
                 for p in &present {
                     if crate::native::force_delete(p).failed == 0 {
                         n += 1;
+                    } else {
+                        failed.push(p.clone());
                     }
+                }
+                if !failed.is_empty() || unknown > 0 {
+                    let mut msg = format!("Deleted shortcuts: {} of {}", n, present.len());
+                    if !failed.is_empty() {
+                        msg.push_str(&format!(" - {}", name_failures("shortcut", &failed)));
+                    }
+                    if unknown > 0 {
+                        msg.push_str(&format!(" - {} could not be checked", unknown));
+                    }
+                    return (StepStatus::Warn, msg);
                 }
                 partial(n, present.len() as u32, "Deleted shortcuts:")
             }
             Op::DeleteServices { names } => {
                 let mut ok = 0u32;
+                let mut failed: Vec<String> = Vec::new();
+                let mut codes: Vec<i32> = Vec::new();
                 for n in names {
-                    if crate::native::stop_delete_service(n) == 0 {
+                    let rc = crate::native::stop_delete_service(n);
+                    if rc == 0 {
                         ok += 1;
+                    } else {
+                        if !codes.contains(&rc) {
+                            codes.push(rc);
+                        }
+                        failed.push(n.clone());
                     }
                 }
-                if ok > 0 {
+                if failed.is_empty() {
                     partial(ok, names.len() as u32, "Removed services:")
                 } else {
+                    let codes: Vec<String> = codes.iter().map(|c| c.to_string()).collect();
                     (
                         StepStatus::Warn,
-                        "Administrator rights are required to delete services".into(),
+                        format!(
+                            "Removed services: {} of {} - {} (code {})",
+                            ok,
+                            names.len(),
+                            name_failures("service", &failed),
+                            codes.join("/")
+                        ),
                     )
                 }
             }
@@ -1335,25 +1414,38 @@ impl Runner {
                 }
             }
             Op::DeleteOnReboot { paths } => {
-                let present: Vec<String> = safe_paths(paths.clone())
-                    .into_iter()
-                    .filter(|p| crate::native::path_exists(p))
-                    .collect();
-                let mut n = 0;
+                let (present, unknown) = present_or_unknown(safe_paths(paths.clone()));
+                if present.is_empty() && unknown == 0 {
+                    return (StepStatus::Skip, "No leftovers".into());
+                }
+                let mut n = 0u32;
+                let mut failed: Vec<String> = Vec::new();
                 for p in &present {
                     if crate::native::delete_on_reboot(p) == 0 {
                         n += 1;
+                    } else {
+                        failed.push(p.clone());
                     }
                 }
-                if present.is_empty() {
-                    (StepStatus::Skip, "No leftovers".into())
-                } else {
-                    partial(
+                if !failed.is_empty() || unknown > 0 {
+                    let mut msg = format!(
+                        "Scheduled items for deletion on reboot: {} of {}",
                         n,
-                        present.len() as u32,
-                        "Scheduled items for deletion on reboot:",
-                    )
+                        present.len()
+                    );
+                    if !failed.is_empty() {
+                        msg.push_str(&format!(" - {}", name_failures("item", &failed)));
+                    }
+                    if unknown > 0 {
+                        msg.push_str(&format!(" - {} could not be checked", unknown));
+                    }
+                    return (StepStatus::Warn, msg);
                 }
+                partial(
+                    n,
+                    present.len() as u32,
+                    "Scheduled items for deletion on reboot:",
+                )
             }
             Op::Verify {
                 paths,
@@ -2170,6 +2262,35 @@ mod tests {
         for flow in [Flow::Uninstall, Flow::Purge, Flow::FilesOnly] {
             assert!(!flow.title().is_empty());
         }
+    }
+
+    #[test]
+    fn a_failed_probe_keeps_the_target_in_the_batch() {
+        // A genuinely missing file is dropped, and an unanswerable probe keeps
+        // the target (see `present_or_unknown`). Only the first half is
+        // assertable here: provoking a refused probe needs an ACL this test
+        // cannot set up without admin rights.
+        let missing = "D:\\AppsSweepDefinitelyMissing\\x.lnk".to_string();
+        let (keep, unknown) = present_or_unknown(vec![missing]);
+        assert!(keep.is_empty());
+        assert_eq!(unknown, 0);
+        // A path that exists stays in the batch.
+        let here = std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let (keep, _) = present_or_unknown(vec![here]);
+        assert_eq!(keep.len(), 1);
+    }
+
+    #[test]
+    fn failure_messages_name_the_resources() {
+        let one = name_failures("service", &["a".to_string()]);
+        assert!(one.contains("a"), "{}", one);
+        let many: Vec<String> = (0..6).map(|i| format!("s{}", i)).collect();
+        let msg = name_failures("service", &many);
+        assert!(msg.contains("s2") && msg.contains("..."), "{}", msg);
+        assert!(!msg.contains("s3"), "{}", msg);
     }
 
     #[test]
