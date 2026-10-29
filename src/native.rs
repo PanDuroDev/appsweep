@@ -2090,6 +2090,7 @@ fn is_root_path(path: &str) -> bool {
     }
     false
 }
+
 pub fn force_delete(path: &str) -> DeleteReport {
     let mut stats = DeleteStats {
         deleted: 0,
@@ -2427,6 +2428,19 @@ mod tests {
         assert_eq!(wide(""), vec![0]);
         assert_eq!(wide("ا"), vec![0x0627, 0]);
         assert_eq!(wide("😀"), vec![0xD83D, 0xDE00, 0]);
+    }
+
+    #[test]
+    fn long_path_conversion_preserves_drive_and_unc_paths() {
+        assert_eq!(long_path(r"C:\Apps\Demo"), r"\\?\C:\Apps\Demo");
+        assert_eq!(
+            long_path(r"\\server\share\Demo"),
+            r"\\?\UNC\server\share\Demo"
+        );
+        assert_eq!(
+            long_path(r"\\?\C:\Apps\Demo"),
+            r"\\?\C:\Apps\Demo"
+        );
     }
 
     #[test]
