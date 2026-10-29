@@ -2370,9 +2370,14 @@ mod tests {
     ) -> Vec<Step> {
         // Plan tests must not depend on which Windows services or tasks happen
         // to be installed on the CI runner.
-        build_plan_with_discovery(app, flow, settings, keep_data, |_| Some(Vec::new()), |_| {
-            Some(Vec::new())
-        })
+        build_plan_with_discovery(
+            app,
+            flow,
+            settings,
+            keep_data,
+            |_| Some(Vec::new()),
+            |_| Some(Vec::new()),
+        )
     }
 
     fn any_op(steps: &[Step], f: impl Fn(&Op) -> bool) -> bool {
