@@ -268,17 +268,17 @@ pub fn kill_processes_in(path: &str) -> i32 {
 /// Is `candidate` the folder itself or a file inside it? Same rule the helper
 /// uses before it counts or kills a process.
 fn long_path(path: &str) -> String {
-    if path.starts_with(r"\\?\\") {
+    if path.starts_with(r"\\?\") {
         path.to_string()
     } else if let Some(unc) = path.strip_prefix(r"\\") {
-        format!(r"\\?\UNC\\{}", unc)
+        format!(r"\\?\UNC\{}", unc)
     } else {
-        format!(r"\\?\\{}", path)
+        format!(r"\\?\{}", path)
     }
 }
 
 fn normalize_path(path: &str) -> String {
-    let mut value = long_path(path).replace('/', r"\\").to_lowercase();
+    let mut value = long_path(path).replace('/', "\\\\").to_lowercase();
     while value.ends_with('\\') && value.len() > 4 {
         value.pop();
     }
@@ -322,7 +322,7 @@ pub fn command_executable(cmd: &str) -> String {
         &trimmed[..end]
     };
     let normalized = long_path(executable);
-    normalized.strip_prefix(r"\\?\\").unwrap_or(&normalized).to_string()
+    normalized.strip_prefix(r"\\?\").unwrap_or(&normalized).to_string()
 }
 
 pub fn services_under(path: &str) -> Vec<String> {
