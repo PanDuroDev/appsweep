@@ -1401,6 +1401,13 @@ fn resolve_program_path(program: &str) -> Result<String, i32> {
         }
     }
 
+    // Searching PATH while elevated can execute a binary from a
+    // user-writable directory using an administrator token. Explicit paths and
+    // System32 utilities were already handled above, so fail closed instead.
+    if is_elevated() {
+        return Err(2); // ERROR_FILE_NOT_FOUND in trusted locations
+    }
+
     let current_dir = std::env::current_dir().ok();
     let application_dir = std::env::current_exe()
         .ok()
