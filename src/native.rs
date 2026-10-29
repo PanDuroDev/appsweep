@@ -1486,9 +1486,9 @@ pub fn run_shell(file: &str, params: &str, cwd: Option<&str>, wait: bool) -> (i3
         Err(error) => return (error, 0),
     };
     let command_line = if params.is_empty() {
-        quote_windows_argument(file)
+        quote_windows_argument(&application)
     } else {
-        format!("{} {}", quote_windows_argument(file), params)
+        format!("{} {}", quote_windows_argument(&application), params)
     };
     // Pass an explicit, resolved application path so CreateProcessW cannot
     // choose an executable from the AppSweep or current working directory.
@@ -3090,15 +3090,31 @@ pub fn package_registered(full_name: &str) -> Option<bool> {
     Some(false)
 }
 
+fn read_task_names() -> Option<Vec<String>> {
+    // Locale-independent output lets us distinguish a complete empty match from
+    // an inaccessible, malformed, or truncated inventory.
+    let listing = capture_command_oem("schtasks.exe", &["/Query", "/FO", "CSV", "/NH"])?;
+    parse_task_names(&listing)
+}
+
+pub fn tasks_exist(names: &[String]) -> Option<Vec<bool>> {
+    if names.is_empty() {
+        return Some(Vec::new());
+    }
+    let inventory = read_task_names()?;
+    Some(
+        names
+            .iter()
+            .map(|name| inventory.iter().any(|task| task.eq_ignore_ascii_case(name)))
+            .collect(),
+    )
+}
+
 pub fn task_exists(name: &str) -> Option<bool> {
     if name.trim().is_empty() {
         return None;
     }
-    // Query the locale-independent CSV inventory once instead of inferring
-    // absence from an arbitrary non-zero schtasks /TN exit code.
-    let listing = capture_command_oem("schtasks.exe", &["/Query", "/FO", "CSV", "/NH"])?;
-    let names = parse_task_names(&listing)?;
-    Some(names.iter().any(|task| task.eq_ignore_ascii_case(name)))
+    tasks_exist(&[name.to_string()])?.into_iter().next()
 }
 
 pub fn delete_on_reboot(path: &str) -> i32 {
