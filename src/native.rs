@@ -69,6 +69,9 @@ extern "C" {
         logcap: i32,
     ) -> i32;
     fn as_path_exists(path: *const u16) -> i32;
+    fn as_path_state(path: *const u16) -> i32;
+    fn as_service_exists(name: *const u16) -> i32;
+    fn as_task_exists(name: *const u16) -> i32;
     fn as_grants_everyone_full_control(path: *const u16) -> i32;
     fn as_grant_everyone_full_control(path: *const u16) -> i32;
     fn as_delete_on_reboot(path: *const u16) -> i32;
@@ -363,6 +366,59 @@ pub fn grant_everyone_full_control(path: &str) -> i32 {
 pub fn path_exists(path: &str) -> bool {
     let w = wide(path);
     unsafe { as_path_exists(w.as_ptr()) != 0 }
+}
+
+/// `Some(true)` there, `Some(false)` confirmed missing, `None` inaccessible.
+/// Access denied must not read as "already gone".
+pub fn path_state(path: &str) -> Option<bool> {
+    let w = wide(path);
+    match unsafe { as_path_state(w.as_ptr()) } {
+        1 => Some(true),
+        0 => Some(false),
+        _ => None,
+    }
+}
+
+pub fn service_exists(name: &str) -> Option<bool> {
+    let w = wide(name);
+    match unsafe { as_service_exists(w.as_ptr()) } {
+        1 => Some(true),
+        0 => Some(false),
+        _ => None,
+    }
+}
+
+/// `Some(true)` the package is still registered for the current user,
+/// `Some(false)` confirmed gone, `None` could not ask.
+pub fn package_registered(full_name: &str) -> Option<bool> {
+    use windows::core::HSTRING;
+    use windows::Management::Deployment::PackageManager;
+    let sid = current_user_sid();
+    if sid.is_empty() {
+        return None;
+    }
+    let pm = PackageManager::new().ok()?;
+    let list = pm
+        .FindPackagesByUserSecurityId(&HSTRING::from(sid.as_str()))
+        .ok()?;
+    for pkg in list {
+        // A missing ID on one rogue entry is not proof the rest are gone.
+        let Ok(id) = pkg.Id() else { continue };
+        let Ok(name) = id.FullName() else { continue };
+        if name.to_string_lossy().eq_ignore_ascii_case(full_name) {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
+pub fn task_exists(name: &str) -> Option<bool> {
+    let w = wide(name);
+    match unsafe { as_task_exists(w.as_ptr()) } {
+        1 => Some(true),
+        0 => Some(false),
+        _ => None,
+    }
 }
 
 pub fn delete_on_reboot(path: &str) -> i32 {

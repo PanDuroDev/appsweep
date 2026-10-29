@@ -48,21 +48,57 @@ pub struct Step {
 #[derive(Clone, Debug)]
 pub enum Op {
     Nothing,
-    KillProcesses { path: String },
-    RestorePoint { desc: String },
-    BackupRegistry { root: RegRoot, key: String },
-    RunUninstaller { cmd: String },
-    RunMsi { product: String },
-    RunWinget { name: String },
-    RemoveUwp { full_name: String },
-    ForceDelete { paths: Vec<String> },
-    Recycle { paths: Vec<String> },
-    DeleteReg { keys: Vec<(RegRoot, String)> },
-    DeleteShortcuts { paths: Vec<String> },
-    DeleteServices { names: Vec<String> },
-    DeleteTasks { names: Vec<String> },
-    DeleteOnReboot { paths: Vec<String> },
-    Verify { paths: Vec<String> },
+    KillProcesses {
+        path: String,
+    },
+    RestorePoint {
+        desc: String,
+    },
+    BackupRegistry {
+        root: RegRoot,
+        key: String,
+    },
+    RunUninstaller {
+        cmd: String,
+    },
+    RunMsi {
+        product: String,
+    },
+    RunWinget {
+        name: String,
+    },
+    RemoveUwp {
+        full_name: String,
+    },
+    ForceDelete {
+        paths: Vec<String>,
+    },
+    Recycle {
+        paths: Vec<String>,
+    },
+    DeleteReg {
+        keys: Vec<(RegRoot, String)>,
+    },
+    DeleteShortcuts {
+        paths: Vec<String>,
+    },
+    DeleteServices {
+        names: Vec<String>,
+    },
+    DeleteTasks {
+        names: Vec<String>,
+    },
+    DeleteOnReboot {
+        paths: Vec<String>,
+    },
+    Verify {
+        paths: Vec<String>,
+        reg: Vec<(RegRoot, String)>,
+        services: Vec<String>,
+        tasks: Vec<String>,
+        shortcuts: Vec<String>,
+        package: Option<String>,
+    },
     CleanTemp,
 }
 
@@ -324,7 +360,9 @@ pub fn find_traces(app: &AppEntry) -> Vec<PathBuf> {
     out
 }
 
-fn reg_key_exists(root: RegRoot, path: &str) -> bool {
+/// `Some(true)` present, `Some(false)` confirmed missing, `None` could not ask.
+/// A denied or broken query is not proof of absence.
+fn reg_key_state(root: RegRoot, path: &str) -> Option<bool> {
     use winreg::enums::*;
     use winreg::RegKey;
     let (hive, view) = match root {
@@ -332,9 +370,17 @@ fn reg_key_exists(root: RegRoot, path: &str) -> bool {
         RegRoot::Hklm32 => (HKEY_LOCAL_MACHINE, KEY_READ | KEY_WOW64_32KEY),
         RegRoot::Hkcu => (HKEY_CURRENT_USER, KEY_READ),
     };
-    RegKey::predef(hive)
-        .open_subkey_with_flags(path, view)
-        .is_ok()
+    match RegKey::predef(hive).open_subkey_with_flags(path, view) {
+        Ok(_) => Some(true),
+        Err(e) => match e.kind() {
+            std::io::ErrorKind::NotFound => Some(false),
+            _ => None,
+        },
+    }
+}
+
+fn reg_key_exists(root: RegRoot, path: &str) -> bool {
+    reg_key_state(root, path).unwrap_or(true)
 }
 
 pub fn delete_reg_key(root: RegRoot, path: &str) -> Result<(), String> {
@@ -455,6 +501,19 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
         }
     }
 
+    // Services, scheduled tasks and shortcuts that live in the app folder are
+    // part of what Uninstall and Purge both have to remove - and what Verify
+    // has to check afterwards, so they are discovered once, up front.
+    let svc_names: Vec<String> = match &dir {
+        Some(d) => crate::native::services_under(&s(d)),
+        None => Vec::new(),
+    };
+    let tasks: Vec<String> = match &dir {
+        Some(d) => crate::native::tasks_under(&s(d)),
+        None => Vec::new(),
+    };
+    let shortcuts: Vec<String> = app.shortcuts.iter().map(|p| s(p)).collect();
+
     match flow {
         Flow::Uninstall => {
             if let Some(cmd) = &app.uninstall_string {
@@ -559,15 +618,13 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
             }
             paths = safe_paths(paths);
 
-            let mut svc_names: Vec<String> = Vec::new();
-            if let Some(d) = &dir {
-                svc_names = crate::native::services_under(&s(d));
-            }
             if !svc_names.is_empty() {
                 add(
                     "Stop and delete services",
                     "Remove services running from the app folder",
-                    Op::DeleteServices { names: svc_names },
+                    Op::DeleteServices {
+                        names: svc_names.clone(),
+                    },
                     false,
                     true,
                 );
@@ -575,18 +632,16 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
 
             // Autostart tasks that point into the app folder are part of its
             // footprint; removing the folder alone would leave them broken.
-            if let Some(d) = &dir {
-                let tasks = crate::native::tasks_under(&s(d));
-                if !tasks.is_empty() {
-                    let n = tasks.len();
-                    add(
-                        "Delete scheduled tasks",
-                        &format!("Remove {} startup tasks", n),
-                        Op::DeleteTasks { names: tasks },
-                        false,
-                        true,
-                    );
-                }
+            if !tasks.is_empty() {
+                add(
+                    "Delete scheduled tasks",
+                    &format!("Remove {} startup tasks", tasks.len()),
+                    Op::DeleteTasks {
+                        names: tasks.clone(),
+                    },
+                    false,
+                    true,
+                );
             }
 
             if app.source == Source::Uwp {
@@ -679,30 +734,40 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
                     );
                 }
             }
-            add(
-                "Clean temporary files",
-                "Delete temporary installer leftovers",
-                Op::CleanTemp,
-                false,
-                true,
-            );
+            // No CleanTemp here: that op sweeps %LOCALAPPDATA%\\Temp by name
+            // match, which is outside the folder the user picked.
         }
     }
 
+    // One verify at the end, covering everything the flow tried to remove.
+    // FilesOnly only ever touched the folder, so that is all it checks.
+    let mut verify_paths = Vec::new();
+    if let Some(d) = &dir {
+        verify_paths.push(s(d));
+    }
+    if flow != Flow::FilesOnly {
+        verify_paths.extend(traces.iter().map(|p| s(p)));
+    }
     add(
         "Verify the result",
-        "Confirm the files are gone",
+        "Confirm every tracked resource is gone",
         Op::Verify {
-            paths: {
-                let mut v = Vec::new();
-                if let Some(d) = &dir {
-                    v.push(s(d));
-                }
-                v
+            paths: verify_paths,
+            reg: match flow {
+                Flow::FilesOnly => Vec::new(),
+                _ => app.reg_key.clone().into_iter().collect(),
+            },
+            services: svc_names.clone(),
+            tasks: tasks.clone(),
+            shortcuts: shortcuts.clone(),
+            package: match app.source {
+                Source::Uwp => app.package_full_name.clone(),
+                _ => None,
             },
         },
         false,
-        true,
+        // Reads only, so it also runs after a failure stopped the chain.
+        false,
     );
 
     steps
@@ -822,6 +887,88 @@ pub fn run_plan_file(path: &str) -> i32 {
         let _ = std::fs::write(&plan.result_path, text);
     }
     0
+}
+
+// ---------------------------------------------------------------- verification
+
+/// What a read-only verification of one removal decided.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Verdict {
+    /// Every tracked resource was probed and none is left.
+    Gone,
+    /// At least one resource is provably still there.
+    Left(String),
+    /// A probe failed outright, so absence cannot be claimed.
+    UnknownState(String),
+}
+
+/// Read-only proof that the resources a flow tried to remove are gone.
+///
+/// A probe that errors (access denied, a broken registry handle) is never
+/// treated as absence: "could not check" and "checked and it is gone" are
+/// different answers, and only the second one may say "completely removed".
+fn verify_all(
+    paths: &[String],
+    reg: &[(RegRoot, String)],
+    services: &[String],
+    tasks: &[String],
+    shortcuts: &[String],
+    package: Option<&str>,
+) -> Verdict {
+    // Flipping to UnknownState the first time a probe fails, so a broken probe
+    // can never be reported as clean.
+    fn note_unknown(flag: &mut Option<String>, what: &str, why: &str) {
+        if flag.is_none() {
+            *flag = Some(format!("Could not check {} ({})", what, why));
+        }
+    }
+
+    let mut unknown: Option<String> = None;
+    let mut left: Vec<String> = Vec::new();
+
+    for p in paths.iter().chain(shortcuts.iter()) {
+        match crate::native::path_state(p) {
+            Some(true) => left.push(p.clone()),
+            Some(false) => {}
+            None => note_unknown(&mut unknown, p, "access denied or unavailable"),
+        }
+    }
+    for (root, key) in reg {
+        match reg_key_state(*root, key) {
+            Some(true) => left.push(format!("{} {}", root.label(), key)),
+            Some(false) => {}
+            None => note_unknown(&mut unknown, key, "registry query failed"),
+        }
+    }
+    for name in services {
+        if crate::native::service_exists(name) == Some(true) {
+            left.push(format!("service {}", name));
+        }
+    }
+    for name in tasks {
+        if crate::native::task_exists(name) == Some(true) {
+            left.push(format!("task {}", name));
+        }
+    }
+    if let Some(full) = package {
+        if crate::native::package_registered(full) == Some(true) {
+            left.push(format!("package {}", full));
+        }
+    }
+
+    if !left.is_empty() {
+        let shown = left.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+        let more = if left.len() > 3 {
+            format!(" and {} more", left.len() - 3)
+        } else {
+            String::new()
+        };
+        return Verdict::Left(format!("Still on disk: {}{}", shown, more));
+    }
+    match unknown {
+        Some(why) => Verdict::UnknownState(why),
+        None => Verdict::Gone,
+    }
 }
 
 // ---------------------------------------------------------------- execution
@@ -1202,17 +1349,24 @@ impl Runner {
                     )
                 }
             }
-            Op::Verify { paths } => {
-                let left: Vec<&String> = paths
-                    .iter()
-                    .filter(|p| crate::native::path_exists(p))
-                    .collect();
-                if left.is_empty() {
-                    self.verified_gone = true;
-                    (StepStatus::Ok, "Removed completely".into())
-                } else {
-                    (StepStatus::Warn, "Some files still exist".into())
-                }
+            Op::Verify {
+                paths,
+                reg,
+                services,
+                tasks,
+                shortcuts,
+                package,
+            } => {
+                let (st, detail) =
+                    match verify_all(paths, reg, services, tasks, shortcuts, package.as_deref()) {
+                        Verdict::Gone => {
+                            self.verified_gone = true;
+                            (StepStatus::Ok, "Removed completely".to_string())
+                        }
+                        Verdict::Left(what) => (StepStatus::Warn, what),
+                        Verdict::UnknownState(what) => (StepStatus::Warn, what),
+                    };
+                (st, detail)
             }
             Op::CleanTemp => {
                 let mut n = 0u32;
@@ -1637,6 +1791,51 @@ pub fn selftest() -> i32 {
     }
     println!("path failures: {}", path_failures);
 
+    // ---- Verification probes (issue #9): absence, presence and "cannot tell"
+    // must stay three different answers.
+    let mut verify_failures = 0;
+    let gone_probe = root.join("verify-gone-42");
+    let _ = std::fs::remove_dir_all(&gone_probe);
+    let here_probe = root.join("verify-here");
+    let _ = std::fs::create_dir_all(&here_probe);
+    let states = (
+        crate::native::path_state(gone_probe.to_str().unwrap_or_default()),
+        crate::native::path_state(here_probe.to_str().unwrap_or_default()),
+        crate::native::path_state(""),
+    );
+    println!(
+        "verify probe states: gone={:?} here={:?} empty={:?}",
+        states.0, states.1, states.2
+    );
+    if states.0 != Some(false) || states.1 != Some(true) || states.2.is_some() {
+        verify_failures += 1;
+    }
+    let svc = crate::native::service_exists("appsweep-no-such-service-42");
+    println!("verify service probe: {:?}", svc);
+    if svc != Some(false) {
+        verify_failures += 1;
+    }
+    let task = crate::native::task_exists("\\AppSweep\\no-such-task-42");
+    println!("verify task probe: {:?}", task);
+    if task != Some(false) {
+        verify_failures += 1;
+    }
+    match verify_all(
+        &[gone_probe.to_string_lossy().to_string()],
+        &[(RegRoot::Hkcu, "Software\\AppSweepNoSuchKey42".to_string())],
+        &[],
+        &[],
+        &[],
+        None,
+    ) {
+        Verdict::Gone => {}
+        other => {
+            println!("verify verdict wrong: {:?}", other);
+            verify_failures += 1;
+        }
+    }
+    println!("verify failures: {}", verify_failures);
+
     // ---- ACL safety (issue #5): a forced delete must not leave an object with
     // Everyone full control behind. Disposable temp tree only.
     let mut acl_failures = 0;
@@ -1794,6 +1993,91 @@ mod tests {
         assert!(any_op(&steps, |o| matches!(o, Op::Verify { .. })));
         assert!(!any_op(&steps, |o| matches!(o, Op::DeleteReg { .. })));
         assert!(!any_op(&steps, |o| matches!(o, Op::DeleteShortcuts { .. })));
+        // The complaint behind #11: this flow also swept %LOCALAPPDATA%\\Temp.
+        assert!(!any_op(&steps, |o| matches!(o, Op::CleanTemp)));
+    }
+
+    #[test]
+    fn files_only_verifies_only_the_folder_it_touched() {
+        let mut a = app("Demo", "D:\\Apps\\Demo");
+        a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
+        a.shortcuts = vec![PathBuf::from("D:\\Start\\Demo.lnk")];
+        let steps = build_plan(&a, Flow::FilesOnly, &Settings::default(), true);
+        let v = steps
+            .iter()
+            .find_map(|s| match &s.op {
+                Op::Verify { paths, reg, .. } => Some((paths.clone(), reg.clone())),
+                _ => None,
+            })
+            .expect("FilesOnly must still verify what it deleted");
+        assert_eq!(v.0, vec!["D:\\Apps\\Demo".to_string()]);
+        assert!(v.1.is_empty(), "FilesOnly never touches the registry");
+    }
+
+    #[test]
+    fn verify_runs_once_and_even_after_the_chain_stopped() {
+        let mut a = app("Demo", "D:\\Apps\\Demo");
+        a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
+        for flow in [Flow::Uninstall, Flow::Purge, Flow::FilesOnly] {
+            let steps = build_plan(&a, flow, &Settings::default(), true);
+            let verifies: Vec<&Step> = steps
+                .iter()
+                .filter(|s| matches!(s.op, Op::Verify { .. }))
+                .collect();
+            assert_eq!(verifies.len(), 1, "{:?} verification count", flow);
+            // Auto-cascade off stops the optional steps after a failure; the
+            // verify is the one step that must still run, because it only reads.
+            assert!(
+                !verifies[0].optional,
+                "{:?} verify must not be optional",
+                flow
+            );
+            // Op is not PartialEq (it holds whole plans' worth of data), so
+            // compare titles instead.
+            assert_eq!(
+                steps.last().map(|s| s.title.as_str()),
+                Some("Verify the result"),
+                "{:?} verify must be the last step",
+                flow
+            );
+        }
+    }
+
+    #[test]
+    fn purge_verifies_the_registry_it_removed() {
+        let mut a = app("Demo", "D:\\Apps\\Demo");
+        a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
+        let steps = build_plan(&a, Flow::Purge, &Settings::default(), true);
+        let reg = steps.iter().find_map(|s| match &s.op {
+            Op::Verify { reg, .. } => Some(reg.clone()),
+            _ => None,
+        });
+        assert_eq!(
+            reg,
+            Some(vec![(RegRoot::Hkcu, "Software\\Demo".to_string())])
+        );
+    }
+
+    #[test]
+    fn only_a_confirmed_absence_counts_as_completely_removed() {
+        // A path that cannot exist on this machine: verified as gone.
+        let missing = "D:\\Apps\\AppSweep-verify-does-not-exist-42";
+        assert_eq!(
+            verify_all(&[missing.to_string()], &[], &[], &[], &[], None),
+            Verdict::Gone
+        );
+        // Nothing tracked at all is not proof of anything either: there is
+        // simply nothing to report as left, so it stays Gone only when every
+        // requested probe answered.
+        assert_eq!(verify_all(&[], &[], &[], &[], &[], None), Verdict::Gone);
+        // A path that does exist is left behind, never a clean pass.
+        let here = std::env::current_exe()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        match verify_all(&[here], &[], &[], &[], &[], None) {
+            Verdict::Left(msg) => assert!(msg.starts_with("Still on disk:")),
+            other => panic!("expected Left, got {:?}", other),
+        }
     }
 
     #[test]

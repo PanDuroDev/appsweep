@@ -865,6 +865,42 @@ int as_path_exists(const wchar_t* path) {
     return a == INVALID_FILE_ATTRIBUTES ? 0 : 1;
 }
 
+// 1 = there, 0 = confirmed missing, -1 = could not tell. Only FILE_NOT_FOUND
+// and PATH_NOT_FOUND mean "gone": access denied is not absence.
+int as_path_state(const wchar_t* path) {
+    if (!path) return -1;
+    DWORD a = GetFileAttributesW(long_path(path).c_str());
+    if (a != INVALID_FILE_ATTRIBUTES) return 1;
+    DWORD e = GetLastError();
+    return (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? 0 : -1;
+}
+
+int as_service_exists(const wchar_t* name) {
+    if (!name) return -1;
+    SC_HANDLE sc = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+    if (!sc) return -1;
+    SC_HANDLE svc = OpenServiceW(sc, name, SERVICE_QUERY_STATUS);
+    int rc;
+    if (svc) {
+        rc = 1;
+        CloseServiceHandle(svc);
+    } else {
+        rc = GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST ? 0 : -1;
+    }
+    CloseServiceHandle(sc);
+    return rc;
+}
+
+// schtasks exit code 0 means the query succeeded, so the task is still there.
+int as_task_exists(const wchar_t* name) {
+    if (!name) return -1;
+    std::wstring cmd = L"schtasks.exe /Query /TN \"" + std::wstring(name) + L"\"";
+    uint32_t code = 0;
+    int rc = as_run_cmd(cmd.c_str(), 1, &code);
+    if (rc != 0) return -1;
+    return code == 0 ? 1 : 0;
+}
+
 // Schedule deletion at next reboot (last resort).
 int as_delete_on_reboot(const wchar_t* path) {
     if (!path) return ERROR_INVALID_PARAMETER;
