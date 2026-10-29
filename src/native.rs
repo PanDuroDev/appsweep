@@ -3032,24 +3032,11 @@ pub fn task_exists(name: &str) -> Option<bool> {
     if name.trim().is_empty() {
         return None;
     }
-    let program = system_program_path("schtasks.exe").ok()?;
-    let command = format!(
-        "{} /Query /TN {} /HRESULT",
-        quote_windows_argument(&program),
-        quote_windows_argument(name)
-    );
-    let (launch_error, code) = run_cmd(&command, true);
-    if launch_error != 0 {
-        return None;
-    }
-    // With /HRESULT, only the documented file-not-found HRESULT is proof that
-    // a scheduled task is absent. Other non-zero codes may mean access denied,
-    // Task Scheduler unavailable, or an invalid request.
-    match code {
-        0 => Some(true),
-        0x8007_0002 => Some(false), // HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
-        _ => None,
-    }
+    // Query the locale-independent CSV inventory once instead of inferring
+    // absence from an arbitrary non-zero schtasks /TN exit code.
+    let listing = capture_command_oem("schtasks.exe", &["/Query", "/FO", "CSV", "/NH"])?;
+    let names = parse_task_names(&listing)?;
+    Some(names.iter().any(|task| task.eq_ignore_ascii_case(name)))
 }
 
 pub fn delete_on_reboot(path: &str) -> i32 {
@@ -3575,6 +3562,25 @@ fn parse_tasks(listing: &str, folder: &str) -> Option<Vec<String>> {
     Some(result)
 }
 
+fn parse_task_names(listing: &str) -> Option<Vec<String>> {
+    if listing.trim().is_empty() {
+        return None;
+    }
+    let rows = parse_csv_rows(listing)?;
+    let mut names = Vec::with_capacity(rows.len());
+    for row in rows {
+        if row.len() < 2 || row[1].trim().is_empty() {
+            return None;
+        }
+        names.push(row[1].trim().to_string());
+    }
+    if names.is_empty() {
+        None
+    } else {
+        Some(names)
+    }
+}
+
 /// `None` means task discovery was incomplete, not that there were no tasks.
 pub fn tasks_under(path: &str) -> Option<Vec<String>> {
     if path.trim().is_empty() {
@@ -3626,6 +3632,18 @@ pub fn ensure_dir(path: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_name_inventory_is_exact_and_rejects_incomplete_rows() {
+        let listing = r#""localhost","\\Demo\\One","Next","Ready"
+"localhost","\\Demo\\Two, with comma","Next","Ready"
+"#;
+        let names = parse_task_names(listing).unwrap();
+        assert!(names.iter().any(|name| name.eq_ignore_ascii_case(r"\\Demo\\One")));
+        assert!(names.iter().any(|name| name == r"\\Demo\\Two, with comma"));
+        assert_eq!(parse_task_names(""), None);
+        assert_eq!(parse_task_names(r#""host""#), None);
+    }
 
     #[test]
     fn task_discovery_rejects_blank_paths_and_uses_path_aware_csv_fields() {
