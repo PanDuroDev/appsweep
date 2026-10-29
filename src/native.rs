@@ -5,6 +5,7 @@ use std::ffi::{c_char, c_void};
 use std::mem::{size_of, transmute, zeroed};
 use std::path::{Component, Path, PathBuf};
 use std::ptr::{null, null_mut};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 type Handle = *mut c_void;
@@ -12,6 +13,7 @@ type Bool = i32;
 type HResult = i32;
 
 const ERROR_INVALID_PARAMETER: i32 = 87;
+const ERROR_GEN_FAILURE: i32 = 31;
 const WAIT_TIMEOUT: u32 = 0x102;
 const INFINITE: u32 = 0xffff_ffff;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -82,8 +84,19 @@ const UNPROTECTED_DACL_SECURITY_INFORMATION: u32 = 0x2000_0000;
 const BI_RGB: u32 = 0;
 const DIB_RGB_COLORS: u32 = 0;
 const DI_NORMAL: u32 = 0x0003;
+const COINIT_MULTITHREADED: u32 = 0x0;
 const COINIT_APARTMENTTHREADED: u32 = 0x2;
 const COINIT_DISABLE_OLE1DDE: u32 = 0x4;
+const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
+const COM_RIGHTS_EXECUTE: u32 = 0x1;
+const COM_RIGHTS_EXECUTE_LOCAL: u32 = 0x2;
+const RPC_C_AUTHN_LEVEL_PKT_PRIVACY: u32 = 6;
+const RPC_C_IMP_LEVEL_IDENTIFY: u32 = 2;
+const EOAC_DISABLE_AAA: u32 = 0x1000;
+const EOAC_NO_CUSTOM_MARSHAL: u32 = 0x2000;
+const SYSTEM_RESTORE_BEGIN_SYSTEM_CHANGE: u32 = 100;
+const SYSTEM_RESTORE_END_SYSTEM_CHANGE: u32 = 101;
+const SYSTEM_RESTORE_APPLICATION_UNINSTALL: u32 = 1;
 const CLSCTX_INPROC_SERVER: u32 = 0x1;
 const STGM_READ: u32 = 0;
 const SLGP_UNCPRIORITY: u32 = 0x2;
@@ -138,6 +151,17 @@ struct TokenPrivileges {
 #[repr(C)]
 struct SidIdentifierAuthority {
     value: [u8; 6],
+}
+
+#[repr(C)]
+struct AbsoluteSecurityDescriptor {
+    revision: u8,
+    sbz1: u8,
+    control: u16,
+    owner: *mut c_void,
+    group: *mut c_void,
+    sacl: *mut c_void,
+    dacl: *mut c_void,
 }
 
 #[repr(C)]
@@ -546,6 +570,24 @@ extern "system" {
         return_length: *mut u32,
     ) -> Bool;
     fn ConvertSidToStringSidW(sid: *mut c_void, string_sid: *mut *mut u16) -> Bool;
+    fn ConvertStringSidToSidW(string_sid: *const u16, sid: *mut *mut c_void) -> Bool;
+    fn InitializeSecurityDescriptor(security_descriptor: *mut c_void, revision: u32) -> Bool;
+    fn SetSecurityDescriptorOwner(
+        security_descriptor: *mut c_void,
+        owner: *mut c_void,
+        owner_defaulted: Bool,
+    ) -> Bool;
+    fn SetSecurityDescriptorGroup(
+        security_descriptor: *mut c_void,
+        group: *mut c_void,
+        group_defaulted: Bool,
+    ) -> Bool;
+    fn SetSecurityDescriptorDacl(
+        security_descriptor: *mut c_void,
+        dacl_present: Bool,
+        dacl: *mut c_void,
+        dacl_defaulted: Bool,
+    ) -> Bool;
     fn LookupPrivilegeValueW(system_name: *const u16, name: *const u16, luid: *mut Luid) -> Bool;
     fn AdjustTokenPrivileges(
         token: Handle,
@@ -710,6 +752,17 @@ extern "system" {
 #[link(name = "ole32")]
 extern "system" {
     fn CoInitializeEx(reserved: *mut c_void, coinit: u32) -> HResult;
+    fn CoInitializeSecurity(
+        security_descriptor: *mut c_void,
+        authentication_services: i32,
+        reserved_services: *mut c_void,
+        reserved: *mut c_void,
+        authentication_level: u32,
+        impersonation_level: u32,
+        authentication_list: *mut c_void,
+        capabilities: u32,
+        reserved3: *mut c_void,
+    ) -> HResult;
     fn CoUninitialize();
     fn CoCreateInstance(
         class_id: *const Guid,
@@ -2821,7 +2874,213 @@ pub fn delete_on_reboot(path: &str) -> i32 {
 }
 
 /// Returns the error code (0 on success) and the point's sequence number.
+static RESTORE_POINT_COM_SECURITY_READY: AtomicBool = AtomicBool::new(false);
+
+fn allocate_sid_with_rid(rid: u32) -> Option<*mut c_void> {
+    let authority = SidIdentifierAuthority {
+        value: [0, 0, 0, 0, 0, 5],
+    };
+    let mut sid = null_mut();
+    let allocated = unsafe {
+        AllocateAndInitializeSid(
+            &authority,
+            1,
+            rid,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            &mut sid,
+        )
+    };
+    if allocated != 0 && !sid.is_null() {
+        Some(sid)
+    } else {
+        None
+    }
+}
+
+/// Configure the process-wide COM ACL required by System Restore. Run this on
+/// a short-lived MTA thread before the UI initializes COM, so the main thread
+/// remains free to use its own apartment model.
+pub fn initialize_restore_point_com_security() -> bool {
+    if RESTORE_POINT_COM_SECURITY_READY.load(Ordering::Acquire) {
+        return true;
+    }
+
+    let initialized = std::thread::Builder::new()
+        .name("appsweep-com-security".into())
+        .spawn(|| unsafe {
+            let com_result = CoInitializeEx(null_mut(), COINIT_MULTITHREADED);
+            if com_result < 0 {
+                return false;
+            }
+
+            let result = (|| {
+                let Some(admins_sid) = allocate_admins_sid() else {
+                    return false;
+                };
+                let Some(local_service_sid) = allocate_sid_with_rid(19) else {
+                    let _ = FreeSid(admins_sid);
+                    return false;
+                };
+                let Some(network_service_sid) = allocate_sid_with_rid(20) else {
+                    let _ = FreeSid(local_service_sid);
+                    let _ = FreeSid(admins_sid);
+                    return false;
+                };
+                let Some(system_sid) = allocate_sid_with_rid(18) else {
+                    let _ = FreeSid(network_service_sid);
+                    let _ = FreeSid(local_service_sid);
+                    let _ = FreeSid(admins_sid);
+                    return false;
+                };
+
+                let self_sid_text = wide(&current_user_sid());
+                let mut self_sid = null_mut();
+                let self_sid_ok =
+                    !self_sid_text.is_empty()
+                        && ConvertStringSidToSidW(self_sid_text.as_ptr(), &mut self_sid) != 0;
+                if !self_sid_ok || self_sid.is_null() {
+                    let _ = FreeSid(system_sid);
+                    let _ = FreeSid(network_service_sid);
+                    let _ = FreeSid(local_service_sid);
+                    let _ = FreeSid(admins_sid);
+                    return false;
+                }
+
+                let mut trustees = [
+                    ExplicitAccessW {
+                        access_permissions: COM_RIGHTS_EXECUTE | COM_RIGHTS_EXECUTE_LOCAL,
+                        access_mode: SET_ACCESS,
+                        inheritance: NO_INHERITANCE,
+                        trustee: TrusteeW {
+                            multiple_trustee: null_mut(),
+                            multiple_trustee_operation: 0,
+                            trustee_form: TRUSTEE_IS_SID,
+                            trustee_type: TRUSTEE_IS_GROUP,
+                            name: admins_sid as *mut u16,
+                        },
+                    },
+                    ExplicitAccessW {
+                        access_permissions: COM_RIGHTS_EXECUTE | COM_RIGHTS_EXECUTE_LOCAL,
+                        access_mode: SET_ACCESS,
+                        inheritance: NO_INHERITANCE,
+                        trustee: TrusteeW {
+                            multiple_trustee: null_mut(),
+                            multiple_trustee_operation: 0,
+                            trustee_form: TRUSTEE_IS_SID,
+                            trustee_type: TRUSTEE_IS_GROUP,
+                            name: local_service_sid as *mut u16,
+                        },
+                    },
+                    ExplicitAccessW {
+                        access_permissions: COM_RIGHTS_EXECUTE | COM_RIGHTS_EXECUTE_LOCAL,
+                        access_mode: SET_ACCESS,
+                        inheritance: NO_INHERITANCE,
+                        trustee: TrusteeW {
+                            multiple_trustee: null_mut(),
+                            multiple_trustee_operation: 0,
+                            trustee_form: TRUSTEE_IS_SID,
+                            trustee_type: TRUSTEE_IS_GROUP,
+                            name: network_service_sid as *mut u16,
+                        },
+                    },
+                    ExplicitAccessW {
+                        access_permissions: COM_RIGHTS_EXECUTE | COM_RIGHTS_EXECUTE_LOCAL,
+                        access_mode: SET_ACCESS,
+                        inheritance: NO_INHERITANCE,
+                        trustee: TrusteeW {
+                            multiple_trustee: null_mut(),
+                            multiple_trustee_operation: 0,
+                            trustee_form: TRUSTEE_IS_SID,
+                            trustee_type: TRUSTEE_IS_GROUP,
+                            name: self_sid as *mut u16,
+                        },
+                    },
+                    ExplicitAccessW {
+                        access_permissions: COM_RIGHTS_EXECUTE | COM_RIGHTS_EXECUTE_LOCAL,
+                        access_mode: SET_ACCESS,
+                        inheritance: NO_INHERITANCE,
+                        trustee: TrusteeW {
+                            multiple_trustee: null_mut(),
+                            multiple_trustee_operation: 0,
+                            trustee_form: TRUSTEE_IS_SID,
+                            trustee_type: TRUSTEE_IS_GROUP,
+                            name: system_sid as *mut u16,
+                        },
+                    },
+                ];
+
+                let mut acl = null_mut();
+                if SetEntriesInAclW(
+                    trustees.len() as u32,
+                    trustees.as_mut_ptr(),
+                    null_mut(),
+                    &mut acl,
+                ) != 0
+                    || acl.is_null()
+                {
+                    let _ = LocalFree(acl);
+                    let _ = LocalFree(self_sid as Handle);
+                    let _ = FreeSid(system_sid);
+                    let _ = FreeSid(network_service_sid);
+                    let _ = FreeSid(local_service_sid);
+                    let _ = FreeSid(admins_sid);
+                    return false;
+                }
+
+                let mut descriptor: AbsoluteSecurityDescriptor = zeroed();
+                let descriptor_ptr = &mut descriptor as *mut AbsoluteSecurityDescriptor as *mut c_void;
+                let descriptor_ok = InitializeSecurityDescriptor(
+                    descriptor_ptr,
+                    SECURITY_DESCRIPTOR_REVISION,
+                ) != 0
+                    && SetSecurityDescriptorOwner(descriptor_ptr, admins_sid, 0) != 0
+                    && SetSecurityDescriptorGroup(descriptor_ptr, admins_sid, 0) != 0
+                    && SetSecurityDescriptorDacl(descriptor_ptr, 1, acl, 0) != 0;
+                let initialized = descriptor_ok
+                    && CoInitializeSecurity(
+                        descriptor_ptr,
+                        -1,
+                        null_mut(),
+                        null_mut(),
+                        RPC_C_AUTHN_LEVEL_PKT_PRIVACY,
+                        RPC_C_IMP_LEVEL_IDENTIFY,
+                        null_mut(),
+                        EOAC_DISABLE_AAA | EOAC_NO_CUSTOM_MARSHAL,
+                        null_mut(),
+                    ) >= 0;
+
+                let _ = LocalFree(acl);
+                let _ = LocalFree(self_sid as Handle);
+                let _ = FreeSid(system_sid);
+                let _ = FreeSid(network_service_sid);
+                let _ = FreeSid(local_service_sid);
+                let _ = FreeSid(admins_sid);
+                initialized
+            })();
+
+            CoUninitialize();
+            result
+        })
+        .ok()
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or(false);
+
+    if initialized {
+        RESTORE_POINT_COM_SECURITY_READY.store(true, Ordering::Release);
+    }
+    initialized
+}
+
 pub fn create_restore_point(description: &str) -> (i32, i64) {
+    if !RESTORE_POINT_COM_SECURITY_READY.load(Ordering::Acquire) {
+        return (ERROR_GEN_FAILURE, 0);
+    }
     type RestoreFn =
         unsafe extern "system" fn(*mut RestorePointInfoW, *mut StateManagerStatus) -> Bool;
     unsafe {
@@ -2841,8 +3100,8 @@ pub fn create_restore_point(description: &str) -> (i32, i64) {
         }
         let restore: RestoreFn = transmute(symbol);
         let mut info: RestorePointInfoW = zeroed();
-        info.event_type = 100; // BEGIN_SYSTEM_CHANGE
-        info.restore_point_type = 1; // APPLICATION_UNINSTALL
+        info.event_type = SYSTEM_RESTORE_BEGIN_SYSTEM_CHANGE;
+        info.restore_point_type = SYSTEM_RESTORE_APPLICATION_UNINSTALL;
         let mut status: StateManagerStatus = zeroed();
         let mut description_wide = [0u16; 256];
         for (index, unit) in description.encode_utf16().take(255).enumerate() {
@@ -2858,6 +3117,49 @@ pub fn create_restore_point(description: &str) -> (i32, i64) {
         let sequence = if ok { status.sequence_number } else { 0 };
         let _ = FreeLibrary(module);
         (error, sequence)
+    }
+}
+
+
+/// End the System Restore change notification after the cleanup operation.
+/// The sequence returned by BEGIN_SYSTEM_CHANGE must be passed back here.
+pub fn end_restore_point(sequence_number: i64) -> i32 {
+    if !RESTORE_POINT_COM_SECURITY_READY.load(Ordering::Acquire) {
+        return ERROR_GEN_FAILURE;
+    }
+    type RestoreFn =
+        unsafe extern "system" fn(*mut RestorePointInfoW, *mut StateManagerStatus) -> Bool;
+    unsafe {
+        let library = wide("srclient.dll");
+        let module = LoadLibraryExW(
+            library.as_ptr(),
+            null_mut(),
+            LOAD_LIBRARY_SEARCH_SYSTEM32,
+        );
+        if module.is_null() {
+            return GetLastError() as i32;
+        }
+        let symbol = GetProcAddress(module, c"SRSetRestorePointW".as_ptr());
+        if symbol.is_null() {
+            let _ = FreeLibrary(module);
+            return 127;
+        }
+        let restore: RestoreFn = transmute(symbol);
+        let mut info: RestorePointInfoW = zeroed();
+        info.event_type = SYSTEM_RESTORE_END_SYSTEM_CHANGE;
+        info.restore_point_type = SYSTEM_RESTORE_APPLICATION_UNINSTALL;
+        info.sequence_number = sequence_number;
+        let mut status: StateManagerStatus = zeroed();
+        let ok = restore(&mut info, &mut status) != 0;
+        let result = if ok {
+            0
+        } else if status.status != 0 {
+            status.status as i32
+        } else {
+            ERROR_GEN_FAILURE
+        };
+        let _ = FreeLibrary(module);
+        result
     }
 }
 
