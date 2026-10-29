@@ -404,9 +404,9 @@ fn scan_registry(root: RegRoot, path: &str, apps: &mut Vec<AppEntry>, next_id: &
             Err(_) => continue,
         };
 
-        if get_u32(&sk, "SystemComponent").unwrap_or(0) == 1 {
-            // Still listed, but flagged as a system component.
-        }
+        // Hidden from the Programs list by Windows itself, but still an
+        // installed app, so it stays in the list and gets classified below.
+        let system_component = get_u32(&sk, "SystemComponent").unwrap_or(0) == 1;
         let name = match get_str(&sk, "DisplayName") {
             Some(n) => n,
             None => continue,
@@ -509,8 +509,8 @@ fn scan_registry(root: RegRoot, path: &str, apps: &mut Vec<AppEntry>, next_id: &
             }
         }
 
-        let is_system = install_dir.as_deref().map(is_system_path).unwrap_or(false)
-            || (uninstall.is_none() && get_u32(&sk, "SystemComponent").unwrap_or(0) == 1);
+        let is_system =
+            install_dir.as_deref().map(is_system_path).unwrap_or(false) || system_component;
 
         let mut e = AppEntry::new(*next_id, name, Source::Registry);
         *next_id += 1;

@@ -56,15 +56,25 @@ pub fn is_protected_dir(dir: &std::path::Path) -> bool {
         }
     }
 
-    for g in guarded {
+    for g in &guarded {
         if g.is_empty() {
             continue;
         }
-        if target == g || g.starts_with(&format!("{}\\", target)) {
+        if target == *g || g.starts_with(&format!("{}\\", target)) {
             return true;
         }
     }
-    false
+    // Inside Windows nothing is an app folder, so the whole subtree is off
+    // limits. Program Files, Users and ProgramData keep only the shallow rule
+    // above: apps really do live one level down in those.
+    let mut deep: Vec<String> = vec![r"c:\windows".into()];
+    for var in ["SystemRoot", "windir"] {
+        if let Ok(v) = std::env::var(var) {
+            deep.push(norm(&v));
+        }
+    }
+    deep.iter()
+        .any(|g| !g.is_empty() && target.starts_with(&format!("{}\\", g)))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -329,6 +339,22 @@ mod tests {
         }
         assert!(!is_protected_dir(Path::new(r"D:\Apps\Demo")));
         assert!(!is_protected_dir(Path::new(r"C:\Program Files\7-Zip")));
+    }
+
+    #[test]
+    fn nothing_inside_windows_is_an_app_folder() {
+        // A registry entry pointing at a Windows subfolder used to pass the
+        // guard: only the Windows folder itself was blocked, not its children.
+        for p in [
+            r"C:\Windows\System32\drivers",
+            r"C:\Windows\System32\DriverStore\FileRepository",
+            r"C:\Windows\Temp\SomeApp",
+            r"C:\Windows\assembly",
+        ] {
+            assert!(is_protected_dir(Path::new(p)), "{p} must be protected");
+        }
+        // A sibling folder whose name merely starts with "Windows" is an app.
+        assert!(!is_protected_dir(Path::new(r"C:\WindowsApps\Demo")));
     }
 
     #[test]

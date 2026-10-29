@@ -302,6 +302,8 @@ pub fn stop_delete_service(name: &str) -> i32 {
     unsafe { as_stop_delete_service(w.as_ptr()) }
 }
 
+/// Capped by the helper's buffer. A list longer than that comes back short, and
+/// the folder's remaining tasks are simply not offered for cleanup.
 pub fn tasks_under(path: &str) -> Vec<String> {
     let s = take_string(
         |out, cap| unsafe {

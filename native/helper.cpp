@@ -916,7 +916,12 @@ int as_create_restore_point(const wchar_t* description) {
 int as_delete_scheduled_task(const wchar_t* name) {
     if (!name) return ERROR_INVALID_PARAMETER;
     std::wstring cmd = L"schtasks.exe /Delete /TN \"" + std::wstring(name) + L"\" /F";
-    return as_run_cmd(cmd.c_str(), 1, nullptr);
+    // as_run_cmd only reports whether the process started, so the exit code has
+    // to be handled here: 0 is the only success. Otherwise a refused delete
+    // (access denied, task gone) looked exactly like a clean one.
+    uint32_t code = 1;
+    int rc = as_run_cmd(cmd.c_str(), 1, &code);
+    return rc == 0 && code == 0 ? 0 : ERROR_ACCESS_DENIED;
 }
 
 // List scheduled tasks whose action references the given directory prefix.
@@ -989,7 +994,7 @@ int as_list_tasks_under(const wchar_t* path, wchar_t* out, int cap) {
     bool task_hit = false;
 
     auto flush = [&]() {
-        if (!task_name.empty() && task_hit && count < 64) {
+        if (!task_name.empty() && task_hit) {
             if (!result.empty()) result += L"\n";
             result += task_name;
             ++count;
@@ -1019,13 +1024,17 @@ int as_list_tasks_under(const wchar_t* path, wchar_t* out, int cap) {
 
         if (key == L"TaskName") {
             task_name = val;
-        } else if (lower(val).find(needle) != std::wstring::npos) {
-            task_hit = true;
+        } else if (key == L"Task To Run") {
+            // Only the command counts. Matching any field pulled in tasks whose
+            // author, comment or trigger merely mentioned the folder.
+            task_hit = lower(val).find(needle) != std::wstring::npos;
         }
     }
     flush();
 
-    if (result.size() >= (size_t)cap) result.resize(cap - 1);
+    // The buffer is fixed, so a very long list would end mid-task-name. Say so
+    // instead of handing back a truncated name that no delete would match.
+    if (result.size() >= (size_t)cap) return ERROR_BUFFER_OVERFLOW;
     wmemcpy(out, result.c_str(), result.size() + 1);
     return 0;
 }

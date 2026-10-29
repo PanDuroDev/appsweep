@@ -1146,10 +1146,20 @@ impl Runner {
                         ok += 1;
                     }
                 }
-                if ok > 0 {
+                if ok == names.len() {
                     (StepStatus::Ok, format!("Removed {} tasks", ok))
+                } else if ok > 0 {
+                    (
+                        StepStatus::Warn,
+                        format!("Removed {} of {} tasks", ok, names.len()),
+                    )
                 } else {
-                    (StepStatus::Skip, "No scheduled tasks".into())
+                    // Not "no tasks": the plan only lists tasks that were found,
+                    // so a zero here means every delete was refused.
+                    (
+                        StepStatus::Warn,
+                        "Could not remove the scheduled tasks - run as administrator".into(),
+                    )
                 }
             }
             Op::DeleteOnReboot { paths } => {
