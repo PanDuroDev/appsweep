@@ -2807,7 +2807,12 @@ pub fn delete_scheduled_task(name: &str) -> i32 {
         "schtasks.exe /Delete /TN {} /F",
         quote_windows_argument(name)
     );
-    run_cmd(&command, true).0
+    let (launch_or_wait_error, exit_code) = run_cmd(&command, true);
+    if launch_or_wait_error != 0 {
+        launch_or_wait_error
+    } else {
+        i32::try_from(exit_code).unwrap_or(i32::MAX)
+    }
 }
 
 fn capture_command_oem(program: &str, arguments: &[&str]) -> Option<String> {
