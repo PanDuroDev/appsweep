@@ -951,6 +951,14 @@ fn result_path_for_plan(plan_path: &Path) -> Result<PathBuf, String> {
 fn run_elevated_plan(plan: &PurgePlan) -> Result<PurgeResult, String> {
     let dir = crate::icons::app_data_dir().join("plans");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir_metadata = std::fs::symlink_metadata(&dir).map_err(|e| e.to_string())?;
+    if !dir_metadata.is_dir()
+        || dir_metadata.file_type().is_symlink()
+        || crate::native::is_reparse_point(&dir)
+    {
+        return Err("The elevated plan directory must be a normal directory".into());
+    }
+    let canonical_dir = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -962,7 +970,7 @@ fn run_elevated_plan(plan: &PurgePlan) -> Result<PurgeResult, String> {
         } else {
             format!("{}-{}-{}", std::process::id(), stamp, attempt)
         };
-        let candidate = dir.join(format!("plan-{}.json", suffix));
+        let candidate = canonical_dir.join(format!("plan-{}.json", suffix));
         match create_locked_plan_file(&candidate) {
             Ok(file) => break (candidate, file),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -1030,6 +1038,14 @@ fn run_elevated_plan(plan: &PurgePlan) -> Result<PurgeResult, String> {
 /// Entry point used by the elevated child process.
 fn validate_elevated_plan_path(path: &str) -> Result<(PathBuf, PathBuf), String> {
     let plans_dir = crate::icons::app_data_dir().join("plans");
+    let directory_metadata = std::fs::symlink_metadata(&plans_dir)
+        .map_err(|e| format!("Could not inspect elevated plan directory: {}", e))?;
+    if !directory_metadata.is_dir()
+        || directory_metadata.file_type().is_symlink()
+        || crate::native::is_reparse_point(&plans_dir)
+    {
+        return Err("The elevated plan directory must be a normal directory".into());
+    }
     let canonical_dir = std::fs::canonicalize(&plans_dir)
         .map_err(|e| format!("Could not validate elevated plan directory: {}", e))?;
     let supplied_path = Path::new(path);
