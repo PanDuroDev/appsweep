@@ -96,7 +96,7 @@ const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
 const COM_RIGHTS_EXECUTE: u32 = 0x1;
 const COM_RIGHTS_EXECUTE_LOCAL: u32 = 0x2;
 const RPC_C_AUTHN_LEVEL_PKT_PRIVACY: u32 = 6;
-const RPC_C_IMP_LEVEL_IDENTIFY: u32 = 2;
+const RPC_C_IMP_LEVEL_IMPERSONATE: u32 = 3;
 const EOAC_DISABLE_AAA: u32 = 0x1000;
 const EOAC_NO_CUSTOM_MARSHAL: u32 = 0x2000;
 const SYSTEM_RESTORE_BEGIN_SYSTEM_CHANGE: u32 = 100;
@@ -3372,7 +3372,7 @@ pub fn initialize_restore_point_com_security() -> bool {
                         null_mut(),
                         null_mut(),
                         RPC_C_AUTHN_LEVEL_PKT_PRIVACY,
-                        RPC_C_IMP_LEVEL_IDENTIFY,
+                        RPC_C_IMP_LEVEL_IMPERSONATE,
                         null_mut(),
                         EOAC_DISABLE_AAA | EOAC_NO_CUSTOM_MARSHAL,
                         null_mut(),
