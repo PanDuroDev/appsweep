@@ -1665,7 +1665,7 @@ pub struct DeleteReport {
 }
 
 fn is_root_path(path: &str) -> bool {
-    let normalized = path.replace('/', "\\\\");
+    let normalized = path.replace('/', "\\");
     let trimmed = normalized.trim_end_matches(|ch| ch == '\\' || ch == '/');
     if trimmed.is_empty() {
         return true;
@@ -1674,13 +1674,16 @@ fn is_root_path(path: &str) -> bool {
     if bytes.len() == 2 && bytes[1] == b':' {
         return true;
     }
-    if trimmed.starts_with("\\\\\\\\") {
-        let parts = trimmed.trim_start_matches('\\\\').split('\\\\').filter(|part| !part.is_empty()).count();
+    if trimmed.starts_with("\\\\") {
+        let parts = trimmed
+            .trim_start_matches('\\')
+            .split('\\')
+            .filter(|part| !part.is_empty())
+            .count();
         return parts <= 2;
     }
     false
 }
-
 pub fn force_delete(path: &str) -> DeleteReport {
     let mut stats = DeleteStats {
         deleted: 0,
