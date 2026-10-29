@@ -290,6 +290,11 @@ struct Guid {
 }
 
 #[repr(C)]
+struct UnknownVTable {
+    methods: [usize; 3],
+}
+
+#[repr(C)]
 struct ShellLinkVTable {
     methods: [usize; 21],
 }
@@ -1038,7 +1043,7 @@ fn decode_multibyte(data: &[u8], code_page: u32, flags: u32) -> Option<String> {
 pub fn capture_cmd(command_line: &str) -> String {
     let mut read_pipe = null_mut();
     let mut write_pipe = null_mut();
-    let mut security = SecurityAttributes {
+    let security = SecurityAttributes {
         length: size_of::<SecurityAttributes>() as u32,
         security_descriptor: null_mut(),
         inherit_handle: 1,
@@ -1146,7 +1151,7 @@ unsafe fn release_com_object(object: *mut c_void) {
     if object.is_null() {
         return;
     }
-    let vtable = *(object as *mut *const ShellLinkVTable);
+    let vtable = *(object as *mut *const UnknownVTable);
     let release: unsafe extern "system" fn(*mut c_void) -> u32 = transmute((*vtable).methods[2]);
     let _ = release(object);
 }
@@ -1650,18 +1655,40 @@ pub struct DeleteReport {
     pub first_error: String,
 }
 
-pub fn force_delete(path: &str) -> DeleteReport {
-    let mut raw = path.to_string();
-    while raw.ends_with(['\\', '/']) {
-        raw.pop();
+fn is_root_path(path: &str) -> bool {
+    let normalized = path.replace('/', "\\\\");
+    let trimmed = normalized.trim_end_matches(['\\\\', '/']);
+    if trimmed.is_empty() {
+        return true;
     }
+    let bytes = trimmed.as_bytes();
+    if bytes.len() == 2 && bytes[1] == b':' {
+        return true;
+    }
+    if trimmed.starts_with("\\\\\\\\") {
+        let parts = trimmed.trim_start_matches('\\\\').split('\\\\').filter(|part| !part.is_empty()).count();
+        return parts <= 2;
+    }
+    false
+}
+
+pub fn force_delete(path: &str) -> DeleteReport {
     let mut stats = DeleteStats {
         deleted: 0,
         failed: 0,
         first_error: String::new(),
     };
-    if !raw.is_empty() {
-        delete_tree(Path::new(&raw), &mut stats, 0);
+    if is_root_path(path) {
+        stats.failed = 1;
+        stats.first_error = format!("Refusing to delete a filesystem root: {}", path);
+    } else {
+        let mut raw = path.to_string();
+        while raw.ends_with(['\\\\', '/']) {
+            raw.pop();
+        }
+        if !raw.is_empty() {
+            delete_tree(Path::new(&raw), &mut stats, 0);
+        }
     }
     DeleteReport {
         deleted: stats.deleted,
