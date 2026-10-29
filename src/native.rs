@@ -513,7 +513,7 @@ fn normalize_path(path: &str) -> String {
 }
 
 fn is_under_normalized(folder: &str, candidate: &str) -> bool {
-    let folder = folder.trim_end_matches(['\\', '/']);
+    let folder = folder.trim_end_matches(|ch| ch == '\\' || ch == '/');
     if folder.is_empty() || candidate.len() < folder.len() || !candidate.starts_with(folder) {
         return false;
     }
@@ -522,6 +522,9 @@ fn is_under_normalized(folder: &str, candidate: &str) -> bool {
 }
 
 pub fn path_is_under(folder: &str, candidate: &str) -> bool {
+    if folder.is_empty() || candidate.is_empty() {
+        return false;
+    }
     is_under_normalized(&normalize_path(folder), &normalize_path(candidate))
 }
 
@@ -1274,7 +1277,10 @@ fn process_image_path(process: Handle) -> Option<String> {
 }
 
 fn count_or_kill_processes(path: &str, terminate: bool) -> i32 {
-    let folder = normalize_path(path).trim_end_matches(['\\', '/']).to_string();
+    if path.trim().is_empty() {
+        return 0;
+    }
+    let folder = normalize_path(path).trim_end_matches(|ch| ch == '\\' || ch == '/').to_string();
     if folder.is_empty() {
         return 0;
     }
@@ -1323,7 +1329,10 @@ pub fn kill_processes_in(path: &str) -> i32 {
 }
 
 pub fn services_under(path: &str) -> Vec<String> {
-    let folder = normalize_path(path).trim_end_matches(['\\', '/']).to_string();
+    if path.trim().is_empty() {
+        return Vec::new();
+    }
+    let folder = normalize_path(path).trim_end_matches(|ch| ch == '\\' || ch == '/').to_string();
     if folder.is_empty() {
         return Vec::new();
     }
@@ -1657,7 +1666,7 @@ pub struct DeleteReport {
 
 fn is_root_path(path: &str) -> bool {
     let normalized = path.replace('/', "\\\\");
-    let trimmed = normalized.trim_end_matches(['\\\\', '/']);
+    let trimmed = normalized.trim_end_matches(|ch| ch == '\\' || ch == '/');
     if trimmed.is_empty() {
         return true;
     }
@@ -1683,11 +1692,12 @@ pub fn force_delete(path: &str) -> DeleteReport {
         stats.first_error = format!("Refusing to delete a filesystem root: {}", path);
     } else {
         let mut raw = path.to_string();
-        while raw.ends_with(['\\\\', '/']) {
+        while raw.ends_with('\\') || raw.ends_with('/') {
             raw.pop();
         }
         if !raw.is_empty() {
-            delete_tree(Path::new(&raw), &mut stats, 0);
+            let long = long_path(&raw);
+            delete_tree(Path::new(&long), &mut stats, 0);
         }
     }
     DeleteReport {
@@ -1735,7 +1745,7 @@ pub fn grant_everyone_full_control(path: &str) -> i32 {
 }
 
 pub fn path_exists(path: &str) -> bool {
-    std::fs::symlink_metadata(path).is_ok()
+    std::fs::symlink_metadata(long_path(path)).is_ok()
 }
 
 pub fn delete_on_reboot(path: &str) -> i32 {
@@ -1826,7 +1836,7 @@ pub fn tasks_under(path: &str) -> Vec<String> {
     };
 
     for original_line in text.lines() {
-        let line = original_line.trim_end_matches(['\r', ' ']);
+        let line = original_line.trim_end_matches(|ch| ch == '\r' || ch == ' ');
         if line.is_empty() {
             flush(&mut task_name, &mut task_hit, &mut result);
             continue;
@@ -1871,7 +1881,7 @@ pub fn path_size(path: &str) -> u64 {
             .map(|entry| size(&entry.path(), depth + 1))
             .sum()
     }
-    size(Path::new(path), 0)
+    size(Path::new(&long_path(path)), 0)
 }
 
 pub fn ensure_dir(path: &str) -> i32 {
