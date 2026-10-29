@@ -105,6 +105,7 @@ impl Source {
 pub enum Arch {
     X64,
     X86,
+    Arm32,
     Arm64,
     Neutral,
 }
@@ -114,6 +115,7 @@ impl Arch {
         match self {
             Arch::X64 => "x64",
             Arch::X86 => "x86",
+            Arch::Arm32 => "ARM32",
             Arch::Arm64 => "ARM64",
             Arch::Neutral => "—",
         }
@@ -228,7 +230,10 @@ impl AppEntry {
             .as_ref()
             .map(|e| !e.exists())
             .unwrap_or(true);
-        dir_gone && exe_gone && self.icon_path.is_none()
+        // The icon is not evidence either way: the scanner stores the launch
+        // exe (or the uninstaller) as the icon source, so an entry with a dead
+        // path always has one and was never reported as a remnant.
+        dir_gone && exe_gone
     }
 
     /// Returns the Arabic reason when deleting this entry would be dangerous.
@@ -369,10 +374,31 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_icon_path_does_not_hide_a_remnant() {
+        // The scanner copies the launch exe into `icon_path`, so a dead install
+        // used to look alive only because that string was still set.
+        let mut e = AppEntry::new(3, "Orphan".into(), Source::Registry);
+        let gone = |name: &str| std::env::temp_dir().join(format!("appsweep-gone-{name}"));
+        e.install_dir = Some(gone("dir"));
+        e.launch_exe = Some(gone("app.exe"));
+        e.icon_path = Some(gone("app.exe"));
+        assert!(e.is_remnant());
+    }
+
+    #[test]
     fn every_enum_variant_has_a_label() {
-        for a in [Arch::X64, Arch::X86, Arch::Arm64, Arch::Neutral] {
+        for a in [
+            Arch::X64,
+            Arch::X86,
+            Arch::Arm32,
+            Arch::Arm64,
+            Arch::Neutral,
+        ] {
             assert!(!a.text().is_empty());
         }
+        // ARMv7 must not be shown as ARM64: one is 32-bit, the other is not.
+        assert_eq!(Arch::Arm32.text(), "ARM32");
+        assert_ne!(Arch::Arm32.text(), Arch::Arm64.text());
         for s in [Source::Registry, Source::Uwp, Source::Shortcut] {
             assert!(!s.label().is_empty());
             assert!(!s.short().is_empty());

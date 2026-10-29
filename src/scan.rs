@@ -358,7 +358,7 @@ fn pe_arch(p: &Path) -> Option<Arch> {
         0x014c => Some(Arch::X86),
         0x8664 => Some(Arch::X64),
         0xaa64 => Some(Arch::Arm64),
-        0x01c4 => Some(Arch::Arm64), // ARMv7 Thumb-2, closest bucket
+        0x01c4 => Some(Arch::Arm32),
         _ => Some(Arch::Neutral),
     }
 }
@@ -1099,6 +1099,46 @@ mod tests {
         if cfg!(target_arch = "x86_64") {
             assert_eq!(arch, Arch::X64);
         }
+    }
+
+    /// A 6-byte PE stub is enough for `pe_arch`, which only reads the header.
+    fn machine_of(machine: u16) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("appsweep-pe-{}.bin", machine));
+        let mut f = std::fs::File::create(&path).expect("temp file");
+        let mut head = [0u8; 0x40];
+        head[..2].copy_from_slice(b"MZ");
+        head[0x3c..0x40].copy_from_slice(&0x40u32.to_le_bytes());
+        let mut body = b"PE\0\0".to_vec();
+        body.extend_from_slice(&machine.to_le_bytes());
+        let mut all = head.to_vec();
+        all.extend_from_slice(&body);
+        std::io::Write::write_all(&mut f, &all).expect("write");
+        path
+    }
+
+    #[test]
+    fn every_pe_machine_gets_its_own_arch() {
+        let cases = [
+            (0x014c, Arch::X86),
+            (0x8664, Arch::X64),
+            (0xaa64, Arch::Arm64),
+            // ARMv7 Thumb-2 is 32-bit; calling it ARM64 was a real bug.
+            (0x01c4, Arch::Arm32),
+            (0x1234, Arch::Neutral),
+        ];
+        for (machine, want) in cases {
+            let f = machine_of(machine);
+            assert_eq!(pe_arch(&f), Some(want), "machine {:#06x}", machine);
+            let _ = std::fs::remove_file(&f);
+        }
+    }
+
+    #[test]
+    fn a_file_without_a_pe_header_is_not_an_image() {
+        let path = std::env::temp_dir().join("appsweep-pe-not-an-image.bin");
+        std::fs::write(&path, b"not a pe file at all").expect("write");
+        assert_eq!(pe_arch(&path), None);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
