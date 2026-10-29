@@ -1198,6 +1198,11 @@ impl eframe::App for AppSweep {
         }
     }
 
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // Behind every panel: the same page colour, so a resize never flashes.
+        self.palette.bg.to_normalized_gamma_f32()
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.palette = Palette::new(self.settings.theme, self.settings.accent);
         let p = self.palette.clone();
@@ -1207,12 +1212,16 @@ impl eframe::App for AppSweep {
         self.draw_header(ui, &ctx);
         self.draw_status(ui);
 
-        egui::CentralPanel::no_frame().show(ui, |ui| {
-            let margin = Frame::NONE.inner_margin(Margin::symmetric(18, 12));
-            margin.show(ui, |ui| {
-                self.draw_list(ui);
+        // `no_frame` means no fill either, so the window's clear colour showed
+        // through every margin and card gap. Fill it with the page colour.
+        egui::CentralPanel::no_frame()
+            .frame(Frame::NONE.fill(p.bg))
+            .show(ui, |ui| {
+                let margin = Frame::NONE.inner_margin(Margin::symmetric(18, 12));
+                margin.show(ui, |ui| {
+                    self.draw_list(ui);
+                });
             });
-        });
 
         self.draw_modals(&ctx);
     }

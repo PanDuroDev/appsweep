@@ -200,10 +200,13 @@ pub fn apply(ctx: &egui::Context, mode: ThemeMode, accent: Accent, density: Dens
 
     visuals.panel_fill = p.bg;
     visuals.window_fill = p.panel;
+    // Also the scroll-bar track, which is painted whenever `floating` is off.
+    // The old values were a leftover blue-black and pure white, both of which
+    // showed up as a coloured strip against the neutral page.
     visuals.extreme_bg_color = if p.dark {
-        Color32::from_rgb(10, 13, 19)
+        Color32::from_rgb(12, 12, 12)
     } else {
-        Color32::from_rgb(255, 255, 255)
+        Color32::from_rgb(226, 226, 226)
     };
     visuals.faint_bg_color = p.bg_alt;
     visuals.window_stroke = Stroke::new(1.0, p.border);
@@ -222,12 +225,19 @@ pub fn apply(ctx: &egui::Context, mode: ThemeMode, accent: Accent, density: Dens
     w.noninteractive.fg_stroke = Stroke::new(1.0, p.text_dim);
     w.noninteractive.corner_radius = CornerRadius::same(R_SM);
 
+    // `bg_fill` is also the scroll-bar handle (the track is `extreme_bg_color`),
+    // so it has to differ from both the page and the track. Buttons use
+    // `weak_bg_fill`, which stays a surface tone.
     w.inactive.bg_fill = if p.dark {
-        Color32::from_rgb(30, 37, 50)
+        Color32::from_rgb(34, 34, 34)
     } else {
-        Color32::from_rgb(243, 245, 249)
+        Color32::from_rgb(200, 200, 200)
     };
-    w.inactive.weak_bg_fill = w.inactive.bg_fill;
+    w.inactive.weak_bg_fill = if p.dark {
+        Color32::from_rgb(34, 34, 34)
+    } else {
+        Color32::from_rgb(226, 226, 226)
+    };
     w.inactive.bg_stroke = Stroke::new(1.0, p.outline);
     w.inactive.fg_stroke = Stroke::new(1.0, p.text);
     w.inactive.corner_radius = CornerRadius::same(R_SM);
