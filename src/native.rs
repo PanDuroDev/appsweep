@@ -74,7 +74,6 @@ const ILD_TRANSPARENT: u32 = 0x0001;
 const SHGFI_USEFILEATTRIBUTES: u32 = 0x0000_0010;
 const SHGFI_LARGEICON: u32 = 0x0000_0000;
 const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
-const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
 const BI_RGB: u32 = 0;
 const DIB_RGB_COLORS: u32 = 0;
 const DI_NORMAL: u32 = 0x0003;
@@ -467,7 +466,6 @@ extern "system" {
         output_len: i32,
     ) -> i32;
     fn MoveFileExW(existing_name: *const u16, new_name: *const u16, flags: u32) -> Bool;
-    fn GetFileAttributesW(file_name: *const u16) -> u32;
     fn CreateToolhelp32Snapshot(flags: u32, process_id: u32) -> Handle;
     fn Process32FirstW(snapshot: Handle, entry: *mut ProcessEntry32W) -> Bool;
     fn Process32NextW(snapshot: Handle, entry: *mut ProcessEntry32W) -> Bool;
@@ -899,20 +897,22 @@ pub fn extract_icon(path: &str, size: u32) -> Option<RawIcon> {
             };
             let mut image_list = null_mut();
             let result = SHGetImageList(image_list_kind, &IID_IMAGE_LIST, &mut image_list);
-            if result >= 0 && !image_list.is_null() {
-                let vtable = *(image_list as *mut *const ImageListVTable);
-                let get_icon: unsafe extern "system" fn(
-                    *mut c_void,
-                    i32,
-                    u32,
-                    *mut Handle,
-                ) -> HResult = transmute((*vtable).methods[10]);
-                let _ = get_icon(
-                    image_list,
-                    info.i_icon,
-                    ILD_TRANSPARENT,
-                    &mut icon,
-                );
+            if !image_list.is_null() {
+                if result >= 0 {
+                    let vtable = *(image_list as *mut *const ImageListVTable);
+                    let get_icon: unsafe extern "system" fn(
+                        *mut c_void,
+                        i32,
+                        u32,
+                        *mut Handle,
+                    ) -> HResult = transmute((*vtable).methods[10]);
+                    let _ = get_icon(
+                        image_list,
+                        info.i_icon,
+                        ILD_TRANSPARENT,
+                        &mut icon,
+                    );
+                }
                 release_com_object(image_list);
             }
         }
@@ -1702,13 +1702,6 @@ fn clear_readonly(path: &Path) {
     }
 }
 
-fn is_directory_reparse_point(path: &Path) -> bool {
-    let path = wide(&long_path(&path.to_string_lossy()));
-    let attributes = unsafe { GetFileAttributesW(path.as_ptr()) };
-    attributes != u32::MAX
-        && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0
-}
-
 fn enable_privilege(name: &str) -> bool {
     let process = unsafe { GetCurrentProcess() };
     let mut token = null_mut();
@@ -1951,11 +1944,7 @@ fn restore_acl_snapshot(path: &Path, snapshot: &SavedSecurity) {
 
 
 fn remove_object(path: &Path) -> std::io::Result<()> {
-    if is_directory_reparse_point(path) || path.is_dir() {
-        std::fs::remove_dir(path)
-    } else {
-        std::fs::remove_file(path)
-    }
+    std::fs::remove_dir(path).or_else(|_| std::fs::remove_file(path))
 }
 
 fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
