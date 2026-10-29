@@ -9,10 +9,7 @@ pub fn is_protected_dir(dir: &std::path::Path) -> bool {
             .to_lowercase()
     };
     let target = norm(&dir.to_string_lossy());
-    if target.is_empty()
-        || target.starts_with(r"\\?\")
-        || target.starts_with(r"\\.\")
-    {
+    if target.is_empty() || target.starts_with(r"\\?\") || target.starts_with(r"\\.\") {
         // Extended/device namespaces are intentionally unsupported for app
         // cleanup: checking only their textual prefix can bypass guarded roots.
         return true;
