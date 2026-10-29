@@ -2349,6 +2349,14 @@ fn save_security(path: &Path) -> Option<SavedSecurity> {
     }
 }
 
+fn dacl_protection_security_information(control: u16) -> u32 {
+    if control & SE_DACL_PROTECTED != 0 {
+        PROTECTED_DACL_SECURITY_INFORMATION
+    } else {
+        UNPROTECTED_DACL_SECURITY_INFORMATION
+    }
+}
+
 fn restore_security(path: &Path, saved: &SavedSecurity) -> bool {
     if saved.descriptor.is_null() {
         return false;
@@ -2368,11 +2376,7 @@ fn restore_security(path: &Path, saved: &SavedSecurity) -> bool {
     if unsafe { GetSecurityDescriptorControl(saved.descriptor, &mut control, &mut revision) } == 0 {
         return false;
     }
-    let dacl_protection = if control & SE_DACL_PROTECTED != 0 {
-        PROTECTED_DACL_SECURITY_INFORMATION
-    } else {
-        UNPROTECTED_DACL_SECURITY_INFORMATION
-    };
+    let dacl_protection = dacl_protection_security_information(control);
     // Always restore the DACL state, including a NULL/absent DACL, and preserve
     // whether inheritance was protected instead of silently changing it.
     let security_info = OWNER_SECURITY_INFORMATION
@@ -3736,6 +3740,22 @@ mod tests {
         assert!(is_protected_or_unsupported_path(
             r"\\?\GLOBALROOT\Device\HarddiskVolume1"
         ));
+    }
+
+    #[test]
+    fn dacl_restore_preserves_protected_and_inherited_states() {
+        assert_eq!(
+            dacl_protection_security_information(SE_DACL_PROTECTED),
+            PROTECTED_DACL_SECURITY_INFORMATION
+        );
+        assert_eq!(
+            dacl_protection_security_information(0),
+            UNPROTECTED_DACL_SECURITY_INFORMATION
+        );
+        assert_eq!(
+            dacl_protection_security_information(SE_DACL_PROTECTED | 0x0004),
+            PROTECTED_DACL_SECURITY_INFORMATION
+        );
     }
 
     #[test]
