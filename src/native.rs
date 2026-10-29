@@ -2995,7 +2995,7 @@ pub fn grants_everyone_full_control(path: &str) -> i32 {
             &mut descriptor,
         )
     };
-    if result != 0 {
+    if result != 0 || descriptor.is_null() {
         unsafe {
             let _ = FreeSid(everyone);
             if !descriptor.is_null() {
