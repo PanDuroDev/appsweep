@@ -1079,6 +1079,7 @@ fn verify_all(
 struct Runner {
     tx: Sender<(usize, StepStatus, String)>,
     verified_gone: bool,
+    restore_point: Option<(i64, usize)>,
     app: AppEntry,
     backup_dir: PathBuf,
     log: Vec<String>,
@@ -1112,7 +1113,7 @@ impl Runner {
         self.verified_gone
     }
 
-    fn exec(&mut self, _idx: usize, op: &Op) -> (StepStatus, String) {
+    fn exec(&mut self, idx: usize, op: &Op) -> (StepStatus, String) {
         match op {
             Op::Nothing => (StepStatus::Skip, "This step is not needed".into()),
             Op::Note { message } => (StepStatus::Warn, message.clone()),
@@ -1131,6 +1132,7 @@ impl Runner {
             Op::RestorePoint { desc } => {
                 let (rc, sequence) = crate::native::create_restore_point(desc);
                 if rc == 0 {
+                    self.restore_point = Some((sequence, idx));
                     (
                         StepStatus::Ok,
                         format!("Restore point created (sequence {})", sequence),
@@ -1576,6 +1578,7 @@ pub fn spawn(app: AppEntry, flow: Flow, settings: Settings, keep_data: bool) -> 
     let runner = Runner {
         tx: tx.clone(),
         verified_gone: false,
+        restore_point: None,
         app: app.clone(),
         backup_dir,
         log: Vec::new(),
@@ -1620,6 +1623,28 @@ pub fn spawn(app: AppEntry, flow: Flow, settings: Settings, keep_data: bool) -> 
                 }
                 // Small pause so the UI can show progress on instant steps.
                 thread::sleep(std::time::Duration::from_millis(40));
+            }
+            if let Some((sequence, restore_step)) = r.restore_point.take() {
+                let end_rc = crate::native::end_restore_point(sequence);
+                let (status, detail) = if end_rc == 0 {
+                    (
+                        StepStatus::Ok,
+                        format!(
+                            "Restore point sequence {}; cleanup change notification completed",
+                            sequence
+                        ),
+                    )
+                } else {
+                    (
+                        StepStatus::Warn,
+                        format!(
+                            "Restore point sequence {} was created, but Windows could not close the change notification (code {})",
+                            sequence, end_rc
+                        ),
+                    )
+                };
+                r.log.push(format!("restore-point completion: {}", detail));
+                r.emit(restore_step, status, detail);
             }
             let _ = r.tx.send((total, StepStatus::Ok, String::new()));
         })
@@ -1826,6 +1851,10 @@ pub fn selftest() -> i32 {
         kill_processes: true,
         ..Default::default()
     };
+    if settings.create_restore_point && !crate::native::initialize_restore_point_com_security() {
+        eprintln!("selftest: System Restore COM security initialization failed");
+        return 1;
+    }
 
     println!("selftest root: {}", root.display());
     let mut job = spawn(app, Flow::Purge, settings, false);
