@@ -493,12 +493,26 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
         });
     };
 
-    // A protected folder must not reach any op at all, not just the delete
-    // ones: killing the processes of "C:\Windows" would take the session down.
-    let dir = app
+    // A protected folder must not reach any operation: process killing, trace
+    // cleanup, or registry/package removal can be unsafe with a bad install path.
+    if app
         .install_dir
-        .clone()
-        .filter(|d| !crate::model::is_protected_dir(d));
+        .as_ref()
+        .is_some_and(|dir| crate::model::is_protected_dir(dir))
+    {
+        return vec![Step {
+            title: "Cleanup blocked".into(),
+            detail: "The recorded installation folder is protected. No changes were made.".into(),
+            status: StepStatus::Pending,
+            op: Op::Note {
+                message: "Cleanup blocked because the recorded installation folder is protected"
+                    .into(),
+            },
+            skip_if_gone: false,
+            optional: false,
+        }];
+    }
+    let dir = app.install_dir.clone();
     // "Keep user data" means: only touch the program folder, never the
     // AppData / ProgramData leftovers that hold the user's own files.
     let traces = if keep_data {
