@@ -2,10 +2,10 @@ use crate::model::{AppEntry, RegRoot, Source};
 use crate::settings::Settings;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver, Sender};
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1008,8 +1008,7 @@ fn run_elevated_plan(plan: &PurgePlan) -> Result<PurgeResult, String> {
         return Err("Could not determine the current user SID for elevation".into());
     }
     let params = format!("{} --plan-user-sid \"{}\"", params, parent_user_sid);
-    let (rc, exit_code) =
-        crate::native::run_elevated(&exe.to_string_lossy(), &params, None, true);
+    let (rc, exit_code) = crate::native::run_elevated(&exe.to_string_lossy(), &params, None, true);
     if rc != 0 || exit_code != 0 {
         drop(plan_file);
         let _ = std::fs::remove_file(&plan_path);
@@ -1034,7 +1033,10 @@ fn run_elevated_plan(plan: &PurgePlan) -> Result<PurgeResult, String> {
         Err(error) => {
             drop(plan_file);
             let _ = std::fs::remove_file(&plan_path);
-            return Err(format!("Could not read elevated cleanup results: {}", error));
+            return Err(format!(
+                "Could not read elevated cleanup results: {}",
+                error
+            ));
         }
     };
     let res: PurgeResult = match serde_json::from_str(&text) {
@@ -1043,7 +1045,10 @@ fn run_elevated_plan(plan: &PurgePlan) -> Result<PurgeResult, String> {
             drop(plan_file);
             let _ = std::fs::remove_file(&plan_path);
             let _ = std::fs::remove_file(&result_path);
-            return Err(format!("Could not parse elevated cleanup results: {}", error));
+            return Err(format!(
+                "Could not parse elevated cleanup results: {}",
+                error
+            ));
         }
     };
     drop(plan_file);
@@ -1235,9 +1240,8 @@ fn verify_all(
         }
     }
 
-    let mut unknown: Option<String> = tasks_unknown.then(|| {
-        "Could not check scheduled tasks (the task list could not be read)".to_string()
-    });
+    let mut unknown: Option<String> = tasks_unknown
+        .then(|| "Could not check scheduled tasks (the task list could not be read)".to_string());
     let mut left: Vec<String> = Vec::new();
 
     for p in paths.iter().chain(shortcuts.iter()) {
@@ -1737,23 +1741,22 @@ impl Runner {
                 shortcuts,
                 package,
             } => {
-                let (st, detail) =
-                    match verify_all(
-                        paths,
-                        reg,
-                        services,
-                        tasks,
-                        shortcuts,
-                        package.as_deref(),
-                        *tasks_unknown,
-                    ) {
-                        Verdict::Gone => {
-                            self.verified_gone = true;
-                            (StepStatus::Ok, "Removed completely".to_string())
-                        }
-                        Verdict::Left(what) => (StepStatus::Warn, what),
-                        Verdict::UnknownState(what) => (StepStatus::Warn, what),
-                    };
+                let (st, detail) = match verify_all(
+                    paths,
+                    reg,
+                    services,
+                    tasks,
+                    shortcuts,
+                    package.as_deref(),
+                    *tasks_unknown,
+                ) {
+                    Verdict::Gone => {
+                        self.verified_gone = true;
+                        (StepStatus::Ok, "Removed completely".to_string())
+                    }
+                    Verdict::Left(what) => (StepStatus::Warn, what),
+                    Verdict::UnknownState(what) => (StepStatus::Warn, what),
+                };
                 (st, detail)
             }
             Op::CleanTemp => {
@@ -2497,7 +2500,10 @@ mod tests {
         // Nothing tracked at all is not proof of anything either: there is
         // simply nothing to report as left, so it stays Gone only when every
         // requested probe answered.
-        assert_eq!(verify_all(&[], &[], &[], &[], &[], None, false), Verdict::Gone);
+        assert_eq!(
+            verify_all(&[], &[], &[], &[], &[], None, false),
+            Verdict::Gone
+        );
         // A path that does exist is left behind, never a clean pass.
         let here = std::env::current_exe()
             .map(|p| p.to_string_lossy().to_string())
@@ -2520,7 +2526,10 @@ mod tests {
     fn incomplete_task_discovery_blocks_destructive_flows() {
         assert!(cleanup_blocked_by_resource_discovery(Flow::Uninstall, true));
         assert!(cleanup_blocked_by_resource_discovery(Flow::Purge, true));
-        assert!(!cleanup_blocked_by_resource_discovery(Flow::FilesOnly, true));
+        assert!(!cleanup_blocked_by_resource_discovery(
+            Flow::FilesOnly,
+            true
+        ));
         assert!(!cleanup_blocked_by_resource_discovery(Flow::Purge, false));
     }
 
