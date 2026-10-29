@@ -1233,11 +1233,20 @@ fn verify_all(
             None => note_unknown(&mut unknown, name, "service query failed"),
         }
     }
-    for name in tasks {
-        match crate::native::task_exists(name) {
-            Some(true) => left.push(format!("task {}", name)),
-            Some(false) => {}
-            None => note_unknown(&mut unknown, name, "scheduled-task query failed"),
+    if !tasks.is_empty() {
+        match crate::native::tasks_exist(tasks) {
+            Some(states) => {
+                for (name, exists) in tasks.iter().zip(states) {
+                    if exists {
+                        left.push(format!("task {}", name));
+                    }
+                }
+            }
+            None => note_unknown(
+                &mut unknown,
+                "scheduled tasks",
+                "the inventory query failed or was incomplete",
+            ),
         }
     }
     if let Some(full) = package {
