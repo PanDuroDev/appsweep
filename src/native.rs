@@ -3439,12 +3439,12 @@ mod tests {
     #[test]
     fn task_discovery_rejects_blank_paths_and_uses_path_aware_csv_fields() {
         assert_eq!(tasks_under("   "), None);
-        let listing = r#""localhost","\\Demo\\Sibling","N/A","Ready","Interactive","N/A","0","User","C:\\Apps\\Foobar\\tool.exe"
-"localhost","\\Demo\\Owned","N/A","Ready","Interactive","N/A","0","User","C:\\Apps\\Foo\\tool.exe"
+        let listing = r#""localhost","\Demo\Sibling","N/A","Ready","Interactive","N/A","0","User","C:\Apps\Foobar\tool.exe"
+"localhost","\Demo\Owned","N/A","Ready","Interactive","N/A","0","User","C:\Apps\Foo\tool.exe"
 "#;
         assert_eq!(
             parse_tasks(listing, r"C:\Apps\Foo"),
-            Some(vec![r"\\Demo\\Owned".to_string()])
+            Some(vec![r"\Demo\Owned".to_string()])
         );
         assert_eq!(parse_tasks("", r"C:\Apps\Foo"), Some(Vec::new()));
         assert_eq!(parse_tasks(r#""host","incomplete""#, r"C:\Apps\Foo"), None);
