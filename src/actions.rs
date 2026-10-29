@@ -367,6 +367,16 @@ fn winget_available() -> bool {
 
 // ---------------------------------------------------------------- plan building
 
+/// "Done" when nothing was left over, "Done N of M" when something was:
+/// a step is only a clean Ok when its whole job finished.
+fn partial(done: u32, total: u32, what: &str) -> (StepStatus, String) {
+    if done >= total {
+        (StepStatus::Ok, format!("{} {}", what, done))
+    } else {
+        (StepStatus::Warn, format!("{} {} of {}", what, done, total))
+    }
+}
+
 fn s(p: &Path) -> String {
     p.to_string_lossy().to_string()
 }
@@ -1023,6 +1033,7 @@ impl Runner {
                         errors.push(r.first_error);
                     }
                 }
+                let force_total = deleted + failed;
                 if failed > 0 && !crate::native::is_elevated() {
                     // Retry the leftovers with an elevated helper process.
                     let plan = PurgePlan {
@@ -1048,7 +1059,7 @@ impl Runner {
                 } else if deleted > 0 {
                     (
                         StepStatus::Warn,
-                        format!("Deleted {}, failed {}", deleted, failed),
+                        format!("Deleted {} of {} items", deleted, force_total.max(1)),
                     )
                 } else {
                     (
@@ -1061,19 +1072,17 @@ impl Runner {
                 }
             }
             Op::Recycle { paths } => {
+                let guarded = safe_paths(paths.clone());
                 let mut ok = 0;
-                for p in safe_paths(paths.clone()) {
-                    if crate::native::recycle(&p) == 0 {
+                for p in &guarded {
+                    if crate::native::recycle(p) == 0 {
                         ok += 1;
                     }
                 }
-                if ok > 0 {
-                    (StepStatus::Ok, "Moved to the Recycle Bin".into())
+                if guarded.is_empty() {
+                    (StepStatus::Skip, "No folders to recycle".into())
                 } else {
-                    (
-                        StepStatus::Warn,
-                        "Could not move it to the Recycle Bin".into(),
-                    )
+                    partial(ok, guarded.len() as u32, "Moved to the Recycle Bin:")
                 }
             }
             Op::DeleteReg { keys } => {
@@ -1099,8 +1108,10 @@ impl Runner {
                     };
                     match run_elevated_plan(&plan) {
                         Ok(res) => {
+                            // Count what the helper actually deleted: adding one
+                            // for a partly successful retry reported a clean Ok.
+                            ok += res.deleted;
                             if res.failed == 0 {
-                                ok += 1;
                                 err = None;
                             }
                         }
@@ -1116,27 +1127,30 @@ impl Runner {
                 }
             }
             Op::DeleteShortcuts { paths } => {
+                let present: Vec<String> = safe_paths(paths.clone())
+                    .into_iter()
+                    .filter(|p| Path::new(p).exists())
+                    .collect();
+                if present.is_empty() {
+                    return (StepStatus::Skip, "No shortcuts left".into());
+                }
                 let mut n = 0;
-                for p in safe_paths(paths.clone()) {
-                    if Path::new(&p).exists() && crate::native::force_delete(&p).failed == 0 {
+                for p in &present {
+                    if crate::native::force_delete(p).failed == 0 {
                         n += 1;
                     }
                 }
-                if n > 0 {
-                    (StepStatus::Ok, format!("Deleted {} shortcuts", n))
-                } else {
-                    (StepStatus::Skip, "No shortcuts left".into())
-                }
+                partial(n, present.len() as u32, "Deleted shortcuts:")
             }
             Op::DeleteServices { names } => {
-                let mut ok = 0;
+                let mut ok = 0u32;
                 for n in names {
                     if crate::native::stop_delete_service(n) == 0 {
                         ok += 1;
                     }
                 }
                 if ok > 0 {
-                    (StepStatus::Ok, format!("Removed {} services", ok))
+                    partial(ok, names.len() as u32, "Removed services:")
                 } else {
                     (
                         StepStatus::Warn,
@@ -1168,19 +1182,24 @@ impl Runner {
                 }
             }
             Op::DeleteOnReboot { paths } => {
+                let present: Vec<String> = safe_paths(paths.clone())
+                    .into_iter()
+                    .filter(|p| crate::native::path_exists(p))
+                    .collect();
                 let mut n = 0;
-                for p in safe_paths(paths.clone()) {
-                    if crate::native::path_exists(&p) && crate::native::delete_on_reboot(&p) == 0 {
+                for p in &present {
+                    if crate::native::delete_on_reboot(p) == 0 {
                         n += 1;
                     }
                 }
-                if n > 0 {
-                    (
-                        StepStatus::Ok,
-                        format!("Scheduled {} items for deletion on reboot", n),
-                    )
-                } else {
+                if present.is_empty() {
                     (StepStatus::Skip, "No leftovers".into())
+                } else {
+                    partial(
+                        n,
+                        present.len() as u32,
+                        "Scheduled items for deletion on reboot:",
+                    )
                 }
             }
             Op::Verify { paths } => {
@@ -1197,6 +1216,7 @@ impl Runner {
             }
             Op::CleanTemp => {
                 let mut n = 0u32;
+                let mut matched = 0u32;
                 if let Ok(local) = std::env::var("LOCALAPPDATA") {
                     let temp = PathBuf::from(local).join("Temp");
                     let needle = norm(&self.app.name);
@@ -1207,18 +1227,19 @@ impl Runner {
                                 .and_then(|s| s.to_str())
                                 .map(norm)
                                 .unwrap_or_default();
-                            if name.contains(&needle)
-                                && crate::native::force_delete(&s(&d)).failed == 0
-                            {
-                                n += 1;
+                            if name.contains(&needle) {
+                                matched += 1;
+                                if crate::native::force_delete(&s(&d)).failed == 0 {
+                                    n += 1;
+                                }
                             }
                         }
                     }
                 }
-                if n > 0 {
-                    (StepStatus::Ok, format!("Cleaned {} temporary folders", n))
-                } else {
+                if matched == 0 {
                     (StepStatus::Skip, "No temporary files".into())
+                } else {
+                    partial(n, matched, "Cleaned temporary folders:")
                 }
             }
         }
@@ -1684,6 +1705,37 @@ mod tests {
 
     fn any_op(steps: &[Step], f: impl Fn(&Op) -> bool) -> bool {
         steps.iter().any(|s| f(&s.op))
+    }
+
+    #[test]
+    fn a_partly_done_batch_is_a_warning_with_the_real_counts() {
+        // A multi-resource step that lost half its items used to claim success.
+        assert!(matches!(
+            partial(3, 3, "Removed tasks:"),
+            (StepStatus::Ok, _)
+        ));
+        let (status, msg) = partial(2, 3, "Removed tasks:");
+        assert!(matches!(status, StepStatus::Warn));
+        assert_eq!(msg, "Removed tasks: 2 of 3");
+        let (status, _) = partial(0, 3, "Removed tasks:");
+        assert!(matches!(status, StepStatus::Warn));
+        // Nothing to do is not a failure.
+        assert!(matches!(partial(0, 0, "x:").0, StepStatus::Ok));
+    }
+
+    #[test]
+    fn every_multi_resource_step_reports_how_many_it_finished() {
+        // Guard rail: none of these handlers may hard-code a bare "done".
+        let src = include_str!("actions.rs");
+        for marker in [
+            "Removed services:",
+            "Deleted shortcuts:",
+            "Moved to the Recycle Bin:",
+            "Cleaned temporary folders:",
+            "Scheduled items for deletion on reboot:",
+        ] {
+            assert!(src.contains(marker), "{} lost its partial count", marker);
+        }
     }
 
     #[test]
