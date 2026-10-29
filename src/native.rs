@@ -2075,6 +2075,15 @@ fn is_root_path(path: &str) -> bool {
 
     if let Some(extended) = trimmed.strip_prefix(r"\\?\") {
         if extended
+            .get(..11)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("GLOBALROOT\\"))
+            || extended
+                .get(..7)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Device\\"))
+        {
+            return true;
+        }
+        if extended
             .get(..4)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("UNC\\"))
         {
@@ -2484,6 +2493,8 @@ mod tests {
         assert!(is_root_path(r"\\?\UNC\server\share"));
         assert!(is_root_path(r"\\?\unc\server\share"));
         assert!(is_root_path(r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\"));
+        assert!(is_root_path(r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1"));
+        assert!(is_root_path(r"\\?\Device\HarddiskVolume1"));
         assert!(!is_root_path(r"C:\Apps\Demo"));
         assert!(!is_root_path(r"\\server\share\Demo"));
         assert!(!is_root_path(r"\\?\UNC\server\share\Demo"));
