@@ -749,6 +749,25 @@ extern "system" {
     fn GetObjectW(object: Handle, size: i32, buffer: *mut c_void) -> i32;
 }
 
+struct ComApartment;
+
+impl Drop for ComApartment {
+    fn drop(&mut self) {
+        unsafe {
+            CoUninitialize();
+        }
+    }
+}
+
+fn enter_com_mta() -> Result<ComApartment, i32> {
+    let result = unsafe { CoInitializeEx(null_mut(), COINIT_MULTITHREADED) };
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(ComApartment)
+    }
+}
+
 #[link(name = "ole32")]
 extern "system" {
     fn CoInitializeEx(reserved: *mut c_void, coinit: u32) -> HResult;
@@ -3081,6 +3100,10 @@ pub fn create_restore_point(description: &str) -> (i32, i64) {
     if !RESTORE_POINT_COM_SECURITY_READY.load(Ordering::Acquire) {
         return (ERROR_GEN_FAILURE, 0);
     }
+    let _com = match enter_com_mta() {
+        Ok(apartment) => apartment,
+        Err(error) => return (error, 0),
+    };
     type RestoreFn =
         unsafe extern "system" fn(*mut RestorePointInfoW, *mut StateManagerStatus) -> Bool;
     unsafe {
@@ -3127,6 +3150,10 @@ pub fn end_restore_point(sequence_number: i64) -> i32 {
     if !RESTORE_POINT_COM_SECURITY_READY.load(Ordering::Acquire) {
         return ERROR_GEN_FAILURE;
     }
+    let _com = match enter_com_mta() {
+        Ok(apartment) => apartment,
+        Err(error) => return error,
+    };
     type RestoreFn =
         unsafe extern "system" fn(*mut RestorePointInfoW, *mut StateManagerStatus) -> Bool;
     unsafe {
