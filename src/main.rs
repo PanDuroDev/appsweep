@@ -8,6 +8,7 @@ mod scan;
 mod settings;
 mod theme;
 mod ui;
+mod userdata;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
