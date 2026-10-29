@@ -4,11 +4,8 @@
 use std::ffi::{c_char, c_void};
 use std::mem::{size_of, transmute, zeroed};
 use std::path::Path;
-use std::process::Command;
 use std::ptr::{null, null_mut};
-
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
+use std::time::{Duration, Instant};
 
 type Handle = *mut c_void;
 type Bool = i32;
@@ -72,6 +69,16 @@ const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
 const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 const FILE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
+const FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
+const FILE_SHARE_READ: u32 = 0x0000_0001;
+const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+const OPEN_EXISTING: u32 = 3;
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+const FILE_ATTRIBUTE_TAG_INFO_CLASS: i32 = 9;
+const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
+const SE_DACL_PROTECTED: u16 = 0x1000;
+const UNPROTECTED_DACL_SECURITY_INFORMATION: u32 = 0x2000_0000;
 const BI_RGB: u32 = 0;
 const DIB_RGB_COLORS: u32 = 0;
 const DI_NORMAL: u32 = 0x0003;
@@ -217,6 +224,24 @@ struct ProcessInformation {
     h_thread: Handle,
     process_id: u32,
     thread_id: u32,
+}
+
+#[repr(C)]
+struct FileAttributeTagInfo {
+    file_attributes: u32,
+    reparse_tag: u32,
+}
+
+struct DirectoryHandle(Handle);
+
+impl Drop for DirectoryHandle {
+    fn drop(&mut self) {
+        if !self.0.is_null() && self.0 != -1isize as Handle {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
 }
 
 #[repr(C)]
@@ -376,7 +401,7 @@ struct OsVersionInfoW {
     csd_version: [u16; 128],
 }
 
-#[repr(C)]
+#[repr(C, packed)]
 struct RestorePointInfoW {
     event_type: u32,
     restore_point_type: u32,
@@ -384,7 +409,7 @@ struct RestorePointInfoW {
     description: [u16; 256],
 }
 
-#[repr(C)]
+#[repr(C, packed)]
 struct StateManagerStatus {
     // Windows reports the failure reason here, not in GetLastError.
     status: u32,
@@ -454,11 +479,34 @@ extern "system" {
         bytes_read: *mut u32,
         overlapped: *mut c_void,
     ) -> Bool;
+    fn PeekNamedPipe(
+        pipe: Handle,
+        buffer: *mut c_void,
+        buffer_size: u32,
+        bytes_read: *mut u32,
+        total_bytes_available: *mut u32,
+        bytes_left_this_message: *mut u32,
+    ) -> Bool;
+    fn CreateFileW(
+        file_name: *const u16,
+        desired_access: u32,
+        share_mode: u32,
+        security_attributes: *mut c_void,
+        creation_disposition: u32,
+        flags_and_attributes: u32,
+        template_file: Handle,
+    ) -> Handle;
+    fn GetFileInformationByHandleEx(
+        file: Handle,
+        information_class: i32,
+        file_information: *mut c_void,
+        buffer_size: u32,
+    ) -> Bool;
     fn TerminateProcess(process: Handle, exit_code: u32) -> Bool;
     fn Sleep(milliseconds: u32);
     fn GetModuleHandleW(module_name: *const u16) -> Handle;
     fn GetProcAddress(module: Handle, proc_name: *const c_char) -> *mut c_void;
-    fn LoadLibraryW(file_name: *const u16) -> Handle;
+    fn LoadLibraryExW(file_name: *const u16, file: Handle, flags: u32) -> Handle;
     fn FreeLibrary(module: Handle) -> Bool;
     fn LocalFree(memory: Handle) -> Handle;
     fn MultiByteToWideChar(
@@ -543,6 +591,11 @@ extern "system" {
         dacl_present: *mut Bool,
         dacl: *mut *mut c_void,
         dacl_defaulted: *mut Bool,
+    ) -> Bool;
+    fn GetSecurityDescriptorControl(
+        security_descriptor: *mut c_void,
+        control: *mut u16,
+        revision: *mut u32,
     ) -> Bool;
     fn SetEntriesInAclW(
         count: u32,
@@ -1264,7 +1317,10 @@ pub fn run_shell(file: &str, params: &str, cwd: Option<&str>, wait: bool) -> (i3
     } else {
         format!("{} {}", quote_windows_argument(file), params)
     };
-    let info = match start_process(Some(file), &command_line, cwd, false) {
+    // lpApplicationName must be NULL to retain CreateProcessW's documented
+    // executable search/default-extension behavior for bare names such as regedit.exe.
+    // The executable token is already quoted by quote_windows_argument above.
+    let info = match start_process(None, &command_line, cwd, false) {
         Ok(info) => info,
         Err(error) => return (error as i32, 0),
     };
@@ -1353,7 +1409,7 @@ fn decode_multibyte(data: &[u8], code_page: u32, flags: u32) -> Option<String> {
     }
 }
 
-pub fn capture_cmd(command_line: &str) -> String {
+fn capture_process_output(command_line: &str) -> Option<(Vec<u8>, u32)> {
     let mut read_pipe = null_mut();
     let mut write_pipe = null_mut();
     let security = SecurityAttributes {
@@ -1363,26 +1419,24 @@ pub fn capture_cmd(command_line: &str) -> String {
     };
     unsafe {
         if CreatePipe(&mut read_pipe, &mut write_pipe, &security, 0) == 0 {
-            return String::new();
+            return None;
         }
         if SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0) == 0 {
             let _ = CloseHandle(read_pipe);
             let _ = CloseHandle(write_pipe);
-            return String::new();
+            return None;
         }
     }
 
     let mut command_wide = wide(command_line);
-    let startup = {
-        let mut startup: StartupInfoW = unsafe { zeroed() };
-        startup.cb = size_of::<StartupInfoW>() as u32;
-        startup.dw_flags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-        startup.h_std_output = write_pipe;
-        startup.h_std_error = write_pipe;
-        startup.h_std_input = null_mut();
-        startup.w_show_window = SW_HIDE;
-        startup
-    };
+    let mut startup: StartupInfoW = unsafe { zeroed() };
+    startup.cb = size_of::<StartupInfoW>() as u32;
+    startup.dw_flags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    startup.h_std_output = write_pipe;
+    startup.h_std_error = write_pipe;
+    startup.h_std_input = null_mut();
+    startup.w_show_window = SW_HIDE;
+
     let mut info: ProcessInformation = unsafe { zeroed() };
     let created = unsafe {
         CreateProcessW(
@@ -1405,41 +1459,99 @@ pub fn capture_cmd(command_line: &str) -> String {
         unsafe {
             let _ = CloseHandle(read_pipe);
         }
-        return String::new();
+        return None;
     }
 
+    const OUTPUT_LIMIT: usize = 512 * 1024;
+    const POLL_MILLIS: u32 = 10;
+    let deadline = Instant::now() + Duration::from_secs(20);
     let mut data = Vec::with_capacity(8192);
     let mut chunk = [0u8; 4096];
-    while data.len() < 512 * 1024 {
-        let mut received = 0u32;
-        let ok = unsafe {
-            ReadFile(
-                read_pipe,
-                chunk.as_mut_ptr() as *mut c_void,
-                chunk.len() as u32,
-                &mut received,
-                null_mut(),
-            )
-        };
-        if ok == 0 || received == 0 {
+    let mut pipe_open = true;
+    let mut timed_out = false;
+
+    loop {
+        if Instant::now() >= deadline {
+            timed_out = true;
+            unsafe {
+                let _ = TerminateProcess(info.h_process, 1);
+                let _ = WaitForSingleObject(info.h_process, 1000);
+            }
             break;
         }
-        data.extend_from_slice(&chunk[..received as usize]);
-    }
 
-    let wait = unsafe { WaitForSingleObject(info.h_process, 20_000) };
-    if wait == WAIT_TIMEOUT {
-        unsafe {
-            let _ = TerminateProcess(info.h_process, 1);
-            let _ = WaitForSingleObject(info.h_process, 1000);
+        if pipe_open {
+            let mut available = 0u32;
+            let peeked = unsafe {
+                PeekNamedPipe(
+                    read_pipe,
+                    null_mut(),
+                    0,
+                    null_mut(),
+                    &mut available,
+                    null_mut(),
+                )
+            };
+            if peeked == 0 {
+                pipe_open = false;
+            } else if available > 0 {
+                let request = available.min(chunk.len() as u32);
+                let mut received = 0u32;
+                let read_ok = unsafe {
+                    ReadFile(
+                        read_pipe,
+                        chunk.as_mut_ptr() as *mut c_void,
+                        request,
+                        &mut received,
+                        null_mut(),
+                    )
+                };
+                if read_ok == 0 || received == 0 {
+                    pipe_open = false;
+                } else if data.len() < OUTPUT_LIMIT {
+                    let retain = (OUTPUT_LIMIT - data.len()).min(received as usize);
+                    data.extend_from_slice(&chunk[..retain]);
+                }
+                // Continue draining after the capture limit so a verbose child
+                // cannot block forever because its pipe buffer is full.
+                continue;
+            }
+        }
+
+        match unsafe { WaitForSingleObject(info.h_process, 0) } {
+            WAIT_OBJECT_0 => break,
+            WAIT_FAILED => {
+                unsafe {
+                    let _ = TerminateProcess(info.h_process, 1);
+                    let _ = WaitForSingleObject(info.h_process, 1000);
+                }
+                break;
+            }
+            _ => unsafe { Sleep(POLL_MILLIS) },
         }
     }
+
+    let mut exit_code = 1u32;
+    let exited = unsafe {
+        WaitForSingleObject(info.h_process, 0) == WAIT_OBJECT_0
+            && GetExitCodeProcess(info.h_process, &mut exit_code) != 0
+    };
     unsafe {
         let _ = CloseHandle(info.h_thread);
         let _ = CloseHandle(info.h_process);
         let _ = CloseHandle(read_pipe);
     }
+    if timed_out || !exited {
+        None
+    } else {
+        Some((data, exit_code))
+    }
+}
 
+pub fn capture_cmd(command_line: &str) -> String {
+    let Some((data, _)) = capture_process_output(command_line) else {
+        return String::new();
+    };
     decode_multibyte(&data, CP_UTF8, MB_ERR_INVALID_CHARS)
         .or_else(|| decode_multibyte(&data, CP_ACP, 0))
         .unwrap_or_default()
@@ -1594,8 +1706,19 @@ fn process_image_path(process: Handle) -> Option<String> {
     Some(String::from_utf16_lossy(&image))
 }
 
+fn is_protected_or_unsupported_path(path: &str) -> bool {
+    let trimmed = path.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with(r"\\?\\")
+        || trimmed.starts_with(r"\\.\\")
+    {
+        return true;
+    }
+    crate::model::is_protected_dir(Path::new(trimmed))
+}
+
 fn count_or_kill_processes(path: &str, terminate: bool) -> i32 {
-    if path.trim().is_empty() {
+    if is_protected_or_unsupported_path(path) || is_root_path(path) {
         return 0;
     }
     let folder = normalize_path(path)
@@ -1622,11 +1745,14 @@ fn count_or_kill_processes(path: &str, terminate: bool) -> i32 {
             if !process.is_null() {
                 if let Some(image) = process_image_path(process) {
                     if path_is_under(path, &image) {
-                        count += 1;
-                        if terminate {
-                            unsafe {
-                                let _ = TerminateProcess(process, 1);
-                                let _ = WaitForSingleObject(process, 1500);
+                        if !terminate {
+                            count += 1;
+                        } else {
+                            let terminated = unsafe { TerminateProcess(process, 1) != 0 };
+                            if terminated
+                                && unsafe { WaitForSingleObject(process, 1500) } == WAIT_OBJECT_0
+                            {
+                                count += 1;
                             }
                         }
                     }
@@ -1949,13 +2075,22 @@ fn restore_security(path: &Path, saved: &SavedSecurity) -> bool {
         return false;
     }
     let path_wide = wide(&long_path(&path.to_string_lossy()));
+    let mut control = 0u16;
+    let mut revision = 0u32;
+    if unsafe { GetSecurityDescriptorControl(saved.descriptor, &mut control, &mut revision) } == 0 {
+        return false;
+    }
+    let dacl_protection = if control & SE_DACL_PROTECTED != 0 {
+        PROTECTED_DACL_SECURITY_INFORMATION
+    } else {
+        UNPROTECTED_DACL_SECURITY_INFORMATION
+    };
+    // Always restore the DACL state, including a NULL/absent DACL, and preserve
+    // whether inheritance was protected instead of silently changing it.
     let security_info = OWNER_SECURITY_INFORMATION
         | GROUP_SECURITY_INFORMATION
-        | if present != 0 {
-            DACL_SECURITY_INFORMATION
-        } else {
-            0
-        };
+        | DACL_SECURITY_INFORMATION
+        | dacl_protection;
     unsafe {
         SetNamedSecurityInfoW(
             path_wide.as_ptr() as *mut u16,
@@ -2050,8 +2185,10 @@ fn take_ownership(path: &Path) -> bool {
 }
 
 fn acl_snapshot_and_relax(path: &Path) -> Option<SavedSecurity> {
-    // Without a snapshot there is no way back, so the owner and DACL are left
-    // untouched: a failed delete must never leave changed security behind.
+    // Enable backup/restore rights before trying to snapshot the descriptor.
+    // Never alter ownership or the DACL if capturing the original state fails.
+    let _ = enable_privilege("SeBackupPrivilege");
+    let _ = enable_privilege("SeRestorePrivilege");
     let saved = save_security(path)?;
     let _ = take_ownership(path);
     Some(saved)
@@ -2073,18 +2210,75 @@ fn remove_object(path: &Path) -> std::io::Result<()> {
     }
 }
 
+fn record_delete_failure(stats: &mut DeleteStats, path: &Path, reason: &str) {
+    stats.failed += 1;
+    if stats.first_error.is_empty() {
+        stats.first_error = format!("{} ({})", path.display(), reason);
+    }
+}
+
+fn open_directory_guard(path: &Path) -> std::io::Result<DirectoryHandle> {
+    let path_wide = wide(&path.to_string_lossy());
+    // Omitting FILE_SHARE_DELETE pins this directory against rename/replacement
+    // while it is enumerated. OPEN_REPARSE_POINT ensures a swapped junction is
+    // opened as a link and then rejected rather than followed.
+    let handle = unsafe {
+        CreateFileW(
+            path_wide.as_ptr(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            null_mut(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            null_mut(),
+        )
+    };
+    if handle.is_null() || handle == -1isize as Handle {
+        return Err(std::io::Error::from_raw_os_error(unsafe { GetLastError() } as i32));
+    }
+    let mut attributes = FileAttributeTagInfo {
+        file_attributes: 0,
+        reparse_tag: 0,
+    };
+    let queried = unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FILE_ATTRIBUTE_TAG_INFO_CLASS,
+            &mut attributes as *mut FileAttributeTagInfo as *mut c_void,
+            size_of::<FileAttributeTagInfo>() as u32,
+        ) != 0
+    };
+    if !queried {
+        let error = std::io::Error::from_raw_os_error(unsafe { GetLastError() } as i32);
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+        return Err(error);
+    }
+    if attributes.file_attributes & FILE_ATTRIBUTE_DIRECTORY == 0
+        || attributes.file_attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "directory changed to a non-directory or reparse point",
+        ));
+    }
+    Ok(DirectoryHandle(handle))
+}
+
 fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
     if depth > 64 {
+        record_delete_failure(stats, path, "maximum recursion depth exceeded");
         return;
     }
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(_) => {
-            stats.failed += 1;
-            if stats.first_error.is_empty() {
-                stats.first_error = path.to_string_lossy().into_owned();
-            }
+        Err(error) => {
+            record_delete_failure(stats, path, &format!("metadata query failed: {}", error));
             return;
         }
     };
@@ -2093,66 +2287,166 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
         clear_readonly(path);
         if remove_object(path).is_ok() {
             stats.deleted += 1;
-        } else if stats.first_error.is_empty() {
-            stats.failed += 1;
-            stats.first_error = format!("{} (link)", path.display());
         } else {
-            stats.failed += 1;
+            record_delete_failure(stats, path, "could not remove reparse point");
         }
         return;
     }
 
     if metadata.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(path) {
-            for entry in entries.flatten() {
-                delete_tree(&entry.path(), stats, depth + 1);
+        let mut early_snapshot: Option<SavedSecurity> = None;
+        let mut directory_guard = match open_directory_guard(path) {
+            Ok(handle) => Some(handle),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                early_snapshot = acl_snapshot_and_relax(path);
+                match open_directory_guard(path) {
+                    Ok(handle) => Some(handle),
+                    Err(retry_error) => {
+                        if let Some(snapshot) = early_snapshot.as_ref() {
+                            let _ = restore_acl_snapshot(path, snapshot);
+                        }
+                        record_delete_failure(
+                            stats,
+                            path,
+                            &format!("could not safely open directory: {}", retry_error),
+                        );
+                        return;
+                    }
+                }
+            }
+            Err(error) => {
+                record_delete_failure(
+                    stats,
+                    path,
+                    &format!("could not safely open directory: {}", error),
+                );
+                return;
+            }
+        };
+
+        // The verified directory handle remains open without FILE_SHARE_DELETE
+        // while read_dir and recursive calls use the same path. This blocks
+        // junction/rename swaps during traversal; failure is fail-closed.
+        let mut listing = std::fs::read_dir(path);
+        if matches!(listing, Err(ref e) if e.kind() == std::io::ErrorKind::PermissionDenied) {
+            if early_snapshot.is_none() {
+                early_snapshot = acl_snapshot_and_relax(path);
+            }
+            listing = std::fs::read_dir(path);
+        }
+        let entries = match listing {
+            Ok(entries) => entries,
+            Err(error) => {
+                drop(directory_guard.take());
+                if let Some(snapshot) = early_snapshot.as_ref() {
+                    let restored = restore_acl_snapshot(path, snapshot);
+                    record_delete_failure(
+                        stats,
+                        path,
+                        if restored {
+                            "directory enumeration failed; permissions restored"
+                        } else {
+                            "directory enumeration failed; permissions may not be restored"
+                        },
+                    );
+                } else {
+                    record_delete_failure(
+                        stats,
+                        path,
+                        &format!("directory enumeration failed: {}", error),
+                    );
+                }
+                return;
+            }
+        };
+
+        let mut enumeration_failed = false;
+        for entry in entries {
+            match entry {
+                Ok(entry) => delete_tree(&entry.path(), stats, depth + 1),
+                Err(error) => {
+                    enumeration_failed = true;
+                    record_delete_failure(
+                        stats,
+                        path,
+                        &format!("directory entry enumeration failed: {}", error),
+                    );
+                }
             }
         }
+        drop(directory_guard.take());
+
+        if enumeration_failed {
+            if let Some(snapshot) = early_snapshot.as_ref() {
+                let _ = restore_acl_snapshot(path, snapshot);
+            }
+            return;
+        }
+
         clear_readonly(path);
         match std::fs::remove_dir(path) {
             Ok(()) => stats.deleted += 1,
-            Err(_) => {
-                let snapshot = acl_snapshot_and_relax(path);
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                let snapshot = early_snapshot.or_else(|| acl_snapshot_and_relax(path));
                 clear_readonly(path);
-                if std::fs::remove_dir(path).is_ok() {
-                    stats.deleted += 1;
-                    return;
+                match std::fs::remove_dir(path) {
+                    Ok(()) => stats.deleted += 1,
+                    Err(retry_error) => {
+                        let restored = snapshot
+                            .as_ref()
+                            .is_some_and(|saved| restore_acl_snapshot(path, saved));
+                        record_delete_failure(
+                            stats,
+                            path,
+                            &if snapshot.is_some() && !restored {
+                                format!(
+                                    "directory removal failed and permissions were not restored: {}",
+                                    retry_error
+                                )
+                            } else {
+                                format!("directory removal failed: {}", retry_error)
+                            },
+                        );
+                    }
                 }
-                let restored = snapshot
-                    .as_ref()
-                    .is_some_and(|snapshot| restore_acl_snapshot(path, snapshot));
-                stats.failed += 1;
-                if stats.first_error.is_empty() {
-                    stats.first_error = if snapshot.is_some() && !restored {
-                        format!("{} (dir; permissions were not restored)", path.display())
-                    } else {
-                        format!("{} (dir)", path.display())
-                    };
+            }
+            Err(error) => {
+                if let Some(snapshot) = early_snapshot.as_ref() {
+                    let _ = restore_acl_snapshot(path, snapshot);
                 }
+                record_delete_failure(stats, path, &format!("directory removal failed: {}", error));
             }
         }
     } else {
         clear_readonly(path);
         match std::fs::remove_file(path) {
             Ok(()) => stats.deleted += 1,
-            Err(_) => {
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
                 let snapshot = acl_snapshot_and_relax(path);
                 clear_readonly(path);
-                if std::fs::remove_file(path).is_ok() {
-                    stats.deleted += 1;
-                    return;
+                match std::fs::remove_file(path) {
+                    Ok(()) => stats.deleted += 1,
+                    Err(retry_error) => {
+                        let restored = snapshot
+                            .as_ref()
+                            .is_some_and(|saved| restore_acl_snapshot(path, saved));
+                        record_delete_failure(
+                            stats,
+                            path,
+                            &if snapshot.is_some() && !restored {
+                                format!(
+                                    "file removal failed and permissions were not restored: {}",
+                                    retry_error
+                                )
+                            } else {
+                                format!("file removal failed: {}", retry_error)
+                            },
+                        );
+                    }
                 }
-                let restored = snapshot
-                    .as_ref()
-                    .is_some_and(|snapshot| restore_acl_snapshot(path, snapshot));
-                stats.failed += 1;
-                if stats.first_error.is_empty() {
-                    stats.first_error = if snapshot.is_some() && !restored {
-                        format!("{} (file; permissions were not restored)", path.display())
-                    } else {
-                        format!("{} (file)", path.display())
-                    };
-                }
+            }
+            Err(error) => {
+                record_delete_failure(stats, path, &format!("file removal failed: {}", error));
             }
         }
     }
@@ -2224,6 +2518,9 @@ pub fn force_delete(path: &str) -> DeleteReport {
     if is_root_path(path) {
         stats.failed = 1;
         stats.first_error = format!("Refusing to delete a filesystem root: {}", path);
+    } else if is_protected_or_unsupported_path(path) {
+        stats.failed = 1;
+        stats.first_error = format!("Refusing to delete a protected or unsupported path: {}", path);
     } else {
         let mut raw = path.to_string();
         while raw.ends_with('\\') || raw.ends_with('/') {
@@ -2469,7 +2766,11 @@ pub fn create_restore_point(description: &str) -> (i32, i64) {
         unsafe extern "system" fn(*mut RestorePointInfoW, *mut StateManagerStatus) -> Bool;
     unsafe {
         let library = wide("srclient.dll");
-        let module = LoadLibraryW(library.as_ptr());
+        let module = LoadLibraryExW(
+            library.as_ptr(),
+            null_mut(),
+            LOAD_LIBRARY_SEARCH_SYSTEM32,
+        );
         if module.is_null() {
             return (GetLastError() as i32, 0);
         }
@@ -2483,18 +2784,17 @@ pub fn create_restore_point(description: &str) -> (i32, i64) {
         info.event_type = 100; // BEGIN_SYSTEM_CHANGE
         info.restore_point_type = 1; // APPLICATION_UNINSTALL
         let mut status: StateManagerStatus = zeroed();
-        for (index, unit) in description
-            .encode_utf16()
-            .take(info.description.len() - 1)
-            .enumerate()
-        {
-            info.description[index] = unit;
+        let mut description_wide = [0u16; 256];
+        for (index, unit) in description.encode_utf16().take(255).enumerate() {
+            description_wide[index] = unit;
         }
+        info.description = description_wide;
         let ok = restore(&mut info, &mut status) != 0;
         // On failure the reason is in nStatus; GetLastError is not the source.
         let error = if ok { 0 } else { status.status as i32 };
         // Frequency suppression reuses an existing point and returns its
         // sequence, so a non-zero sequence only proves a point exists.
+        // Copy packed fields by value; never create references to unaligned fields.
         let sequence = if ok { status.sequence_number } else { 0 };
         let _ = FreeLibrary(module);
         (error, sequence)
@@ -2510,17 +2810,21 @@ pub fn delete_scheduled_task(name: &str) -> i32 {
 }
 
 fn capture_command_oem(program: &str, arguments: &[&str]) -> Option<String> {
-    let mut command = Command::new(program);
-    command.args(arguments).creation_flags(CREATE_NO_WINDOW);
-    let output = command.output().ok()?;
-    // A query that failed did not find "nothing" - it did not run.
-    if !output.status.success() {
+    // Quote every token according to CreateProcessW rules and reuse the bounded
+    // pipe reader. A launch failure, timeout, or non-zero exit is not an empty list.
+    let command_line = std::iter::once(program)
+        .chain(arguments.iter().copied())
+        .map(quote_windows_argument)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let (output, exit_code) = capture_process_output(&command_line)?;
+    if exit_code != 0 {
         return None;
     }
     Some(
-        decode_multibyte(&output.stdout, CP_OEMCP, 0)
-            .or_else(|| decode_multibyte(&output.stdout, CP_ACP, 0))
-            .unwrap_or_else(|| String::from_utf8_lossy(&output.stdout).into_owned()),
+        decode_multibyte(&output, CP_OEMCP, 0)
+            .or_else(|| decode_multibyte(&output, CP_ACP, 0))
+            .unwrap_or_else(|| String::from_utf8_lossy(&output).into_owned()),
     )
 }
 
@@ -2666,6 +2970,15 @@ pub fn ensure_dir(path: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restore_point_structs_match_the_windows_pack_one_layout() {
+        assert_eq!(std::mem::size_of::<RestorePointInfoW>(), 528);
+        assert_eq!(std::mem::offset_of!(RestorePointInfoW, sequence_number), 8);
+        assert_eq!(std::mem::offset_of!(RestorePointInfoW, description), 16);
+        assert_eq!(std::mem::size_of::<StateManagerStatus>(), 12);
+        assert_eq!(std::mem::offset_of!(StateManagerStatus, sequence_number), 4);
+    }
 
     #[test]
     fn wide_strings_are_nul_terminated_utf16() {
