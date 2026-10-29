@@ -3121,7 +3121,7 @@ pub fn package_registered(full_name: &str) -> Option<bool> {
 fn read_task_names() -> Option<Vec<String>> {
     // Locale-independent output lets us distinguish a complete empty match from
     // an inaccessible, malformed, or truncated inventory.
-    let listing = capture_command_oem("schtasks.exe", &["/Query", "/FO", "CSV", "/NH"])?;
+    let listing = capture_command_oem("schtasks.exe", &["/Query", "/FO", "CSV", "/V", "/NH"])?;
     parse_task_names(&listing)
 }
 
