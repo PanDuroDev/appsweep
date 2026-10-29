@@ -621,7 +621,8 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
     if cleanup_blocked_by_resource_discovery(flow, tasks_unknown || services_unknown) {
         return vec![Step {
             title: "Cleanup cancelled".into(),
-            detail: "Services or scheduled tasks could not be enumerated, so no changes were made.".into(),
+            detail: "Services or scheduled tasks could not be enumerated, so no changes were made."
+                .into(),
             status: StepStatus::Pending,
             op: Op::Note {
                 message: "Cleanup cancelled because service/task discovery failed".into(),
@@ -1000,6 +1001,17 @@ fn run_elevated_plan(plan: &PurgePlan) -> Result<PurgeResult, String> {
 
     let exe = exe_path();
     let params = format!("--plan \"{}\"", plan_path.to_string_lossy());
+    let parent_user_sid = crate::native::current_user_sid();
+    if parent_user_sid.is_empty() {
+        drop(plan_file);
+        let _ = std::fs::remove_file(&plan_path);
+        return Err("Could not determine the current user SID for elevation".into());
+    }
+    let params = format!(
+        "{} --plan-user-sid \"{}\"" ,
+        params,
+        parent_user_sid
+    );
     let (rc, exit_code) =
         crate::native::run_elevated(&exe.to_string_lossy(), &params, None, true);
     if rc != 0 || exit_code != 0 {
@@ -1009,7 +1021,10 @@ fn run_elevated_plan(plan: &PurgePlan) -> Result<PurgeResult, String> {
         if rc != 0 {
             return Err(format!("Could not elevate (code {})", rc));
         }
-        return Err(format!("Elevated cleanup process failed (exit code {})", exit_code));
+        return Err(format!(
+            "Elevated cleanup process failed (exit code {})",
+            exit_code
+        ));
     }
 
     let text = match std::fs::read_to_string(&result_path) {
@@ -1066,7 +1081,15 @@ fn validate_elevated_plan_path(path: &str) -> Result<(PathBuf, PathBuf), String>
     Ok((canonical_path, result_path))
 }
 
-pub fn run_plan_file(path: &str) -> i32 {
+pub fn run_plan_file(path: &str, expected_user_sid: &str) -> i32 {
+    let actual_user_sid = crate::native::current_user_sid();
+    if expected_user_sid.is_empty()
+        || actual_user_sid.is_empty()
+        || !actual_user_sid.eq_ignore_ascii_case(expected_user_sid)
+    {
+        eprintln!("Rejected elevated plan: it was requested by a different Windows account");
+        return 6;
+    }
     let (plan_path, result_path) = match validate_elevated_plan_path(path) {
         Ok(paths) => paths,
         Err(error) => {
