@@ -2654,14 +2654,18 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
                 match open_directory_guard(path) {
                     Ok(handle) => Some(handle),
                     Err(retry_error) => {
-                        if let Some(snapshot) = early_snapshot.as_ref() {
-                            let _ = restore_acl_snapshot(path, snapshot);
-                        }
-                        record_delete_failure(
-                            stats,
-                            path,
-                            &format!("could not safely open directory: {}", retry_error),
-                        );
+                        let restore_failed = early_snapshot
+                            .as_ref()
+                            .is_some_and(|snapshot| !restore_acl_snapshot(path, snapshot));
+                        let detail = if restore_failed {
+                            format!(
+                                "could not safely open directory; permissions may not be restored: {}",
+                                retry_error
+                            )
+                        } else {
+                            format!("could not safely open directory: {}", retry_error)
+                        };
+                        record_delete_failure(stats, path, &detail);
                         return;
                     }
                 }
@@ -2728,8 +2732,15 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
         }
         if enumeration_failed {
             drop(directory_guard.take());
-            if let Some(snapshot) = early_snapshot.as_ref() {
-                let _ = restore_acl_snapshot(path, snapshot);
+            if early_snapshot
+                .as_ref()
+                .is_some_and(|snapshot| !restore_acl_snapshot(path, snapshot))
+            {
+                record_delete_failure(
+                    stats,
+                    path,
+                    "directory enumeration failed; permissions may not be restored",
+                );
             }
             return;
         }
@@ -2765,10 +2776,18 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
                 }
             }
             Err(error) => {
-                if let Some(snapshot) = early_snapshot.as_ref() {
-                    let _ = restore_acl_snapshot(path, snapshot);
-                }
-                record_delete_failure(stats, path, &format!("directory removal failed: {}", error));
+                let restore_failed = early_snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| !restore_acl_snapshot(path, snapshot));
+                let detail = if restore_failed {
+                    format!(
+                        "directory removal failed; permissions were not restored: {}",
+                        error
+                    )
+                } else {
+                    format!("directory removal failed: {}", error)
+                };
+                record_delete_failure(stats, path, &detail);
             }
         }
     } else {
