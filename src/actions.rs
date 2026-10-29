@@ -1,8 +1,11 @@
 use crate::model::{AppEntry, RegRoot, Source};
 use crate::settings::Settings;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 use std::thread;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -888,7 +891,6 @@ pub struct PurgePlan {
     pub services: Vec<String>,
     pub tasks: Vec<String>,
     pub shortcuts: Vec<String>,
-    pub result_path: String,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -898,47 +900,144 @@ pub struct PurgeResult {
     pub log: Vec<String>,
 }
 
+#[cfg(windows)]
+fn create_locked_plan_file(path: &Path) -> std::io::Result<std::fs::File> {
+    // Keep the writer open across the UAC handoff. Share-read allows the
+    // elevated child to read the JSON but blocks another process from replacing,
+    // modifying, or deleting the plan while the user responds to the prompt.
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .share_mode(0x0000_0001) // FILE_SHARE_READ only
+        .open(path)
+}
+
+#[cfg(not(windows))]
+fn create_locked_plan_file(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+fn result_path_for_plan(plan_path: &Path) -> Result<PathBuf, String> {
+    let file_name = plan_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Invalid elevated plan filename".to_string())?;
+    let stem = file_name
+        .strip_suffix(".json")
+        .filter(|stem| stem.starts_with("plan-"))
+        .ok_or_else(|| "Invalid elevated plan filename".to_string())?;
+    Ok(plan_path.with_file_name(format!("{}.result.json", stem)))
+}
+
 fn run_elevated_plan(plan: &PurgePlan) -> Result<PurgeResult, String> {
     let dir = crate::icons::app_data_dir().join("plans");
-    let _ = std::fs::create_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let plan_path = dir.join(format!("plan-{}.json", stamp));
-    let result_path = dir.join(format!("plan-{}.result.json", stamp));
+    let mut attempt = 0u32;
+    let (plan_path, mut plan_file) = loop {
+        let suffix = if attempt == 0 {
+            format!("{}-{}", std::process::id(), stamp)
+        } else {
+            format!("{}-{}-{}", std::process::id(), stamp, attempt)
+        };
+        let candidate = dir.join(format!("plan-{}.json", suffix));
+        match create_locked_plan_file(&candidate) {
+            Ok(file) => break (candidate, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                attempt = attempt.saturating_add(1);
+            }
+            Err(error) => return Err(format!("Could not create an elevated plan: {}", error)),
+        }
+    };
+    let result_path = result_path_for_plan(&plan_path)?;
 
-    let mut p = PurgePlan {
+    let p = PurgePlan {
         delete_paths: plan.delete_paths.clone(),
         delete_reg: plan.delete_reg.clone(),
         services: plan.services.clone(),
         tasks: plan.tasks.clone(),
         shortcuts: plan.shortcuts.clone(),
-        result_path: result_path.to_string_lossy().to_string(),
     };
-    p.result_path = result_path.to_string_lossy().to_string();
-
     let text = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?;
-    std::fs::write(&plan_path, text).map_err(|e| e.to_string())?;
+    plan_file
+        .write_all(text.as_bytes())
+        .and_then(|()| plan_file.flush())
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&plan_path);
+            format!("Could not write the elevated plan: {}", e)
+        })?;
 
     let exe = exe_path();
     let params = format!("--plan \"{}\"", plan_path.to_string_lossy());
-    let (rc, _) = crate::native::run_elevated(&exe.to_string_lossy(), &params, None, true);
-    if rc != 0 {
-        // 1223 = user cancelled the UAC prompt
-        return Err(format!("Could not elevate (code {})", rc));
+    let (rc, exit_code) =
+        crate::native::run_elevated(&exe.to_string_lossy(), &params, None, true);
+    if rc != 0 || exit_code != 0 {
+        drop(plan_file);
+        let _ = std::fs::remove_file(&plan_path);
+        let _ = std::fs::remove_file(&result_path);
+        if rc != 0 {
+            return Err(format!("Could not elevate (code {})", rc));
+        }
+        return Err(format!("Elevated cleanup process failed (exit code {})", exit_code));
     }
 
-    let text = std::fs::read_to_string(&result_path).map_err(|e| e.to_string())?;
-    let res: PurgeResult = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let text = std::fs::read_to_string(&result_path).map_err(|e| {
+        drop(plan_file);
+        let _ = std::fs::remove_file(&plan_path);
+        format!("Could not read elevated cleanup results: {}", e)
+    })?;
+    let res: PurgeResult = serde_json::from_str(&text).map_err(|e| {
+        drop(plan_file);
+        let _ = std::fs::remove_file(&plan_path);
+        let _ = std::fs::remove_file(&result_path);
+        format!("Could not parse elevated cleanup results: {}", e)
+    })?;
+    drop(plan_file);
     let _ = std::fs::remove_file(&plan_path);
     let _ = std::fs::remove_file(&result_path);
     Ok(res)
 }
 
 /// Entry point used by the elevated child process.
+fn validate_elevated_plan_path(path: &str) -> Result<(PathBuf, PathBuf), String> {
+    let plans_dir = crate::icons::app_data_dir().join("plans");
+    let canonical_dir = std::fs::canonicalize(&plans_dir)
+        .map_err(|e| format!("Could not validate elevated plan directory: {}", e))?;
+    let supplied_path = Path::new(path);
+    let metadata = std::fs::symlink_metadata(supplied_path)
+        .map_err(|e| format!("Could not inspect elevated plan: {}", e))?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || crate::native::is_reparse_point(supplied_path)
+    {
+        return Err("Elevated plan must be a regular, non-reparse file".into());
+    }
+    let canonical_path = std::fs::canonicalize(supplied_path)
+        .map_err(|e| format!("Could not resolve elevated plan: {}", e))?;
+    if canonical_path.parent() != Some(canonical_dir.as_path()) {
+        return Err("Elevated plan is outside the AppSweep plans directory".into());
+    }
+    let result_path = result_path_for_plan(&canonical_path)?;
+    Ok((canonical_path, result_path))
+}
+
 pub fn run_plan_file(path: &str) -> i32 {
-    let text = match std::fs::read_to_string(path) {
+    let (plan_path, result_path) = match validate_elevated_plan_path(path) {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("Rejected elevated plan: {}", error);
+            return 4;
+        }
+    };
+    let text = match std::fs::read_to_string(&plan_path) {
         Ok(t) => t,
         Err(_) => return 2,
     };
@@ -1013,8 +1112,25 @@ pub fn run_plan_file(path: &str) -> i32 {
         }
     }
 
-    if let Ok(text) = serde_json::to_string_pretty(&res) {
-        let _ = std::fs::write(&plan.result_path, text);
+    let result_text = match serde_json::to_string_pretty(&res) {
+        Ok(text) => text,
+        Err(_) => return 5,
+    };
+    // create_new is deliberate: an existing file, symlink, or junction must
+    // never be followed/truncated by the elevated process.
+    let mut output = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&result_path)
+    {
+        Ok(file) => file,
+        Err(error) => {
+            eprintln!("Could not safely create elevated result file: {}", error);
+            return 5;
+        }
+    };
+    if output.write_all(result_text.as_bytes()).is_err() || output.flush().is_err() {
+        return 5;
     }
     0
 }
