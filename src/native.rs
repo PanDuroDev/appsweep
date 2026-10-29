@@ -15,6 +15,7 @@ type HResult = i32;
 const ERROR_INVALID_PARAMETER: i32 = 87;
 const ERROR_GEN_FAILURE: i32 = 31;
 const ERROR_INSUFFICIENT_BUFFER: i32 = 122;
+const ERROR_MORE_DATA: u32 = 234;
 const WAIT_TIMEOUT: u32 = 0x102;
 const INFINITE: u32 = 0xffff_ffff;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -1886,95 +1887,139 @@ pub fn kill_process_by_pid(pid: u32) -> i32 {
     }
 }
 
-pub fn services_under(path: &str) -> Vec<String> {
+/// `None` means service inventory could not be read completely. Do not
+/// equate an access/configuration/enumeration error with an empty service list.
+pub fn services_under(path: &str) -> Option<Vec<String>> {
     if path.trim().is_empty() {
-        return Vec::new();
+        return None;
     }
     let folder = normalize_path(path)
         .trim_end_matches(['\\', '/'])
         .to_string();
     if folder.is_empty() {
-        return Vec::new();
+        return None;
     }
 
     unsafe {
         let manager = OpenSCManagerW(null(), null(), SC_MANAGER_ENUMERATE_SERVICE);
         if manager.is_null() {
-            return Vec::new();
+            return None;
         }
 
-        let mut needed = 0u32;
-        let mut returned = 0u32;
-        let mut resume = 0u32;
-        let _ = EnumServicesStatusExW(
-            manager,
-            SC_ENUM_PROCESS_INFO,
-            SERVICE_WIN32,
-            SERVICE_STATE_ALL,
-            null_mut(),
-            0,
-            &mut needed,
-            &mut returned,
-            &mut resume,
-            null(),
-        );
-        let buffer_bytes = (needed as usize).max(4096);
-        let mut buffer = vec![0u64; buffer_bytes.div_ceil(size_of::<u64>())];
-        let allocated_bytes = buffer.len() * size_of::<u64>();
-        let ok = EnumServicesStatusExW(
-            manager,
-            SC_ENUM_PROCESS_INFO,
-            SERVICE_WIN32,
-            SERVICE_STATE_ALL,
-            buffer.as_mut_ptr() as *mut u8,
-            allocated_bytes.min(u32::MAX as usize) as u32,
-            &mut needed,
-            &mut returned,
-            &mut resume,
-            null(),
-        ) != 0;
         let mut names = Vec::new();
+        let mut resume = 0u32;
+        loop {
+            let mut capacity = 64 * 1024usize;
+            let (buffer, ok, error, returned) = loop {
+                let mut buffer = vec![0u64; capacity.div_ceil(size_of::<u64>())];
+                let mut needed = 0u32;
+                let mut returned = 0u32;
+                let allocated_bytes = buffer.len() * size_of::<u64>();
+                let ok = EnumServicesStatusExW(
+                    manager,
+                    SC_ENUM_PROCESS_INFO,
+                    SERVICE_WIN32,
+                    SERVICE_STATE_ALL,
+                    buffer.as_mut_ptr() as *mut u8,
+                    allocated_bytes.min(u32::MAX as usize) as u32,
+                    &mut needed,
+                    &mut returned,
+                    &mut resume,
+                    null(),
+                ) != 0;
+                if ok {
+                    break (buffer, true, 0u32, returned);
+                }
+                let error = GetLastError();
+                if error == ERROR_MORE_DATA && returned == 0 && needed as usize > capacity {
+                    // One unusually large service-list page needs a larger buffer.
+                    capacity = needed as usize;
+                    continue;
+                }
+                break (buffer, false, error, returned);
+            };
 
-        if ok {
+            if !ok && error != ERROR_MORE_DATA {
+                let _ = CloseServiceHandle(manager);
+                return None;
+            }
+            if !ok && returned == 0 {
+                // A repeated ERROR_MORE_DATA with no progress cannot prove that
+                // the complete inventory was examined.
+                let _ = CloseServiceHandle(manager);
+                return None;
+            }
+
             let services = std::slice::from_raw_parts(
                 buffer.as_ptr() as *const EnumServiceStatusProcessW,
                 returned as usize,
             );
             for item in services {
                 if item.service_name.is_null() {
-                    continue;
+                    let _ = CloseServiceHandle(manager);
+                    return None;
                 }
-                let service = OpenServiceW(manager, item.service_name, SERVICE_QUERY_CONFIG);
+                let service_name = wide_ptr_to_string(item.service_name);
+                let service = OpenServiceW(
+                    manager,
+                    item.service_name,
+                    SERVICE_QUERY_CONFIG,
+                );
                 if service.is_null() {
-                    continue;
+                    let _ = CloseServiceHandle(manager);
+                    return None;
                 }
 
                 let mut config_needed = 0u32;
-                let _ = QueryServiceConfigW(service, null_mut(), 0, &mut config_needed);
-                if config_needed > 0 {
-                    let mut config_buffer =
-                        vec![0u64; (config_needed as usize).div_ceil(size_of::<u64>())];
-                    let config_bytes = config_buffer.len() * size_of::<u64>();
-                    if QueryServiceConfigW(
-                        service,
-                        config_buffer.as_mut_ptr() as *mut QueryServiceConfigW,
-                        config_bytes.min(u32::MAX as usize) as u32,
-                        &mut config_needed,
-                    ) != 0
-                    {
-                        let config = &*(config_buffer.as_ptr() as *const QueryServiceConfigW);
-                        let binary_path = wide_ptr_to_string(config.binary_path_name as *const u16);
-                        let executable = command_executable(&binary_path);
-                        if path_is_under(path, &executable) {
-                            names.push(wide_ptr_to_string(item.service_name));
-                        }
-                    }
+                let _ = QueryServiceConfigW(
+                    service,
+                    null_mut(),
+                    0,
+                    &mut config_needed,
+                );
+                if config_needed == 0 {
+                    let _ = CloseServiceHandle(service);
+                    let _ = CloseServiceHandle(manager);
+                    return None;
+                }
+                let mut config_buffer =
+                    vec![0u64; (config_needed as usize).div_ceil(size_of::<u64>())];
+                let config_bytes = config_buffer.len() * size_of::<u64>();
+                let config_ok = QueryServiceConfigW(
+                    service,
+                    config_buffer.as_mut_ptr() as *mut QueryServiceConfigW,
+                    config_bytes.min(u32::MAX as usize) as u32,
+                    &mut config_needed,
+                ) != 0;
+                if !config_ok {
+                    let _ = CloseServiceHandle(service);
+                    let _ = CloseServiceHandle(manager);
+                    return None;
+                }
+
+                let config = &*(config_buffer.as_ptr() as *const QueryServiceConfigW);
+                let binary_path = wide_ptr_to_string(config.binary_path_name as *const u16);
+                let executable = command_executable(&binary_path);
+                if path_is_under(path, &executable) {
+                    names.push(service_name);
                 }
                 let _ = CloseServiceHandle(service);
             }
+
+            if ok {
+                if resume == 0 {
+                    break;
+                }
+                // A successful call normally resets the resume handle. A
+                // nonzero handle here is unexpected; returning unknown is safer
+                // than spinning forever or reporting a partial list.
+                let _ = CloseServiceHandle(manager);
+                return None;
+            }
+            // ERROR_MORE_DATA: resume now points to the next unread service.
         }
         let _ = CloseServiceHandle(manager);
-        names
+        Some(names)
     }
 }
 
