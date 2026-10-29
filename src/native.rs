@@ -2083,23 +2083,14 @@ pub fn services_under(path: &str) -> Option<Vec<String>> {
                     return None;
                 }
                 let service_name = wide_ptr_to_string(item.service_name);
-                let service = OpenServiceW(
-                    manager,
-                    item.service_name,
-                    SERVICE_QUERY_CONFIG,
-                );
+                let service = OpenServiceW(manager, item.service_name, SERVICE_QUERY_CONFIG);
                 if service.is_null() {
                     let _ = CloseServiceHandle(manager);
                     return None;
                 }
 
                 let mut config_needed = 0u32;
-                let _ = QueryServiceConfigW(
-                    service,
-                    null_mut(),
-                    0,
-                    &mut config_needed,
-                );
+                let _ = QueryServiceConfigW(service, null_mut(), 0, &mut config_needed);
                 if config_needed == 0 {
                     let _ = CloseServiceHandle(service);
                     let _ = CloseServiceHandle(manager);
@@ -2531,7 +2522,9 @@ fn open_guarded_directory_component(path: &Path) -> std::io::Result<Handle> {
         )
     };
     if handle.is_null() || handle == -1isize as Handle {
-        return Err(std::io::Error::from_raw_os_error(unsafe { GetLastError() } as i32));
+        return Err(std::io::Error::from_raw_os_error(
+            unsafe { GetLastError() } as i32
+        ));
     }
     let mut attributes = FileAttributeTagInfo {
         file_attributes: 0,
@@ -2880,7 +2873,10 @@ pub fn force_delete(path: &str) -> DeleteReport {
         stats.first_error = format!("Refusing to delete a filesystem root: {}", path);
     } else if is_protected_or_unsupported_path(path) {
         stats.failed = 1;
-        stats.first_error = format!("Refusing to delete a protected or unsupported path: {}", path);
+        stats.first_error = format!(
+            "Refusing to delete a protected or unsupported path: {}",
+            path
+        );
     } else {
         let mut raw = path.to_string();
         while raw.ends_with('\\') || raw.ends_with('/') {
@@ -3149,21 +3145,8 @@ fn allocate_sid_with_rid(rid: u32) -> Option<*mut c_void> {
         value: [0, 0, 0, 0, 0, 5],
     };
     let mut sid = null_mut();
-    let allocated = unsafe {
-        AllocateAndInitializeSid(
-            &authority,
-            1,
-            rid,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            &mut sid,
-        )
-    };
+    let allocated =
+        unsafe { AllocateAndInitializeSid(&authority, 1, rid, 0, 0, 0, 0, 0, 0, 0, &mut sid) };
     if allocated != 0 && !sid.is_null() {
         Some(sid)
     } else {
@@ -3209,9 +3192,8 @@ pub fn initialize_restore_point_com_security() -> bool {
 
                 let self_sid_text = wide(&current_user_sid());
                 let mut self_sid = null_mut();
-                let self_sid_ok =
-                    !self_sid_text.is_empty()
-                        && ConvertStringSidToSidW(self_sid_text.as_ptr(), &mut self_sid) != 0;
+                let self_sid_ok = !self_sid_text.is_empty()
+                    && ConvertStringSidToSidW(self_sid_text.as_ptr(), &mut self_sid) != 0;
                 if !self_sid_ok || self_sid.is_null() {
                     let _ = FreeSid(system_sid);
                     let _ = FreeSid(network_service_sid);
@@ -3302,14 +3284,13 @@ pub fn initialize_restore_point_com_security() -> bool {
                 }
 
                 let mut descriptor: AbsoluteSecurityDescriptor = zeroed();
-                let descriptor_ptr = &mut descriptor as *mut AbsoluteSecurityDescriptor as *mut c_void;
-                let descriptor_ok = InitializeSecurityDescriptor(
-                    descriptor_ptr,
-                    SECURITY_DESCRIPTOR_REVISION,
-                ) != 0
-                    && SetSecurityDescriptorOwner(descriptor_ptr, admins_sid, 0) != 0
-                    && SetSecurityDescriptorGroup(descriptor_ptr, admins_sid, 0) != 0
-                    && SetSecurityDescriptorDacl(descriptor_ptr, 1, acl, 0) != 0;
+                let descriptor_ptr =
+                    &mut descriptor as *mut AbsoluteSecurityDescriptor as *mut c_void;
+                let descriptor_ok =
+                    InitializeSecurityDescriptor(descriptor_ptr, SECURITY_DESCRIPTOR_REVISION) != 0
+                        && SetSecurityDescriptorOwner(descriptor_ptr, admins_sid, 0) != 0
+                        && SetSecurityDescriptorGroup(descriptor_ptr, admins_sid, 0) != 0
+                        && SetSecurityDescriptorDacl(descriptor_ptr, 1, acl, 0) != 0;
                 let initialized = descriptor_ok
                     && CoInitializeSecurity(
                         descriptor_ptr,
@@ -3470,7 +3451,11 @@ fn system_program_path(program: &str) -> Result<String, i32> {
     }
     system_dir.truncate(system_dir_len);
     let system_dir = String::from_utf16_lossy(&system_dir);
-    Ok(format!("{}\\{}", system_dir.trim_end_matches(['\\', '/']), program))
+    Ok(format!(
+        "{}\\{}",
+        system_dir.trim_end_matches(['\\', '/']),
+        program
+    ))
 }
 
 fn capture_command_oem(program: &str, arguments: &[&str]) -> Option<String> {
@@ -3729,7 +3714,9 @@ mod tests {
 "localhost","\Demo\Two, with comma","Next","Ready"
 "#;
         let names = parse_task_names(listing).unwrap();
-        assert!(names.iter().any(|name| name.eq_ignore_ascii_case(r"\Demo\One")));
+        assert!(names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(r"\Demo\One")));
         assert!(names.iter().any(|name| name == r"\Demo\Two, with comma"));
         assert_eq!(parse_task_names(""), None);
         assert_eq!(parse_task_names(r#""host""#), None);
@@ -3756,7 +3743,9 @@ mod tests {
         assert!(is_protected_or_unsupported_path(r"\\?\C:\Windows"));
         assert!(is_protected_or_unsupported_path(r"\\.\C:\Windows"));
         assert!(is_protected_or_unsupported_path(""));
-        assert!(is_protected_or_unsupported_path(r"\\?\GLOBALROOT\Device\HarddiskVolume1"));
+        assert!(is_protected_or_unsupported_path(
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1"
+        ));
     }
 
     #[test]
