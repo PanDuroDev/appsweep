@@ -34,6 +34,7 @@ const DACL_SECURITY_INFORMATION: u32 = 0x0004;
 const PROTECTED_DACL_SECURITY_INFORMATION: u32 = 0x8000_0000;
 const SET_ACCESS: u32 = 2;
 const TRUSTEE_IS_SID: u32 = 0;
+const TRUSTEE_IS_USER: u32 = 1;
 const TRUSTEE_IS_GROUP: u32 = 2;
 const TRUSTEE_IS_WELL_KNOWN_GROUP: u32 = 5;
 const NO_INHERITANCE: u32 = 0;
@@ -2082,7 +2083,7 @@ fn clear_readonly(path: &Path) {
 }
 
 /// Fail closed if Win32 cannot determine whether the path is a reparse point.
-fn is_reparse_point(path: &Path) -> bool {
+pub(crate) fn is_reparse_point(path: &Path) -> bool {
     let path_wide = wide(&long_path(&path.to_string_lossy()));
     unsafe {
         let attributes = GetFileAttributesW(path_wide.as_ptr());
@@ -3043,7 +3044,7 @@ pub fn initialize_restore_point_com_security() -> bool {
                             multiple_trustee: null_mut(),
                             multiple_trustee_operation: 0,
                             trustee_form: TRUSTEE_IS_SID,
-                            trustee_type: TRUSTEE_IS_GROUP,
+                            trustee_type: TRUSTEE_IS_WELL_KNOWN_GROUP,
                             name: admins_sid as *mut u16,
                         },
                     },
@@ -3055,7 +3056,7 @@ pub fn initialize_restore_point_com_security() -> bool {
                             multiple_trustee: null_mut(),
                             multiple_trustee_operation: 0,
                             trustee_form: TRUSTEE_IS_SID,
-                            trustee_type: TRUSTEE_IS_GROUP,
+                            trustee_type: TRUSTEE_IS_WELL_KNOWN_GROUP,
                             name: local_service_sid as *mut u16,
                         },
                     },
@@ -3067,7 +3068,7 @@ pub fn initialize_restore_point_com_security() -> bool {
                             multiple_trustee: null_mut(),
                             multiple_trustee_operation: 0,
                             trustee_form: TRUSTEE_IS_SID,
-                            trustee_type: TRUSTEE_IS_GROUP,
+                            trustee_type: TRUSTEE_IS_WELL_KNOWN_GROUP,
                             name: network_service_sid as *mut u16,
                         },
                     },
@@ -3079,7 +3080,7 @@ pub fn initialize_restore_point_com_security() -> bool {
                             multiple_trustee: null_mut(),
                             multiple_trustee_operation: 0,
                             trustee_form: TRUSTEE_IS_SID,
-                            trustee_type: TRUSTEE_IS_GROUP,
+                            trustee_type: TRUSTEE_IS_USER,
                             name: self_sid as *mut u16,
                         },
                     },
@@ -3091,7 +3092,7 @@ pub fn initialize_restore_point_com_security() -> bool {
                             multiple_trustee: null_mut(),
                             multiple_trustee_operation: 0,
                             trustee_form: TRUSTEE_IS_SID,
-                            trustee_type: TRUSTEE_IS_GROUP,
+                            trustee_type: TRUSTEE_IS_WELL_KNOWN_GROUP,
                             name: system_sid as *mut u16,
                         },
                     },
@@ -3446,6 +3447,9 @@ pub fn tasks_under(path: &str) -> Option<Vec<String>> {
         return None;
     }
     let listing = capture_command_oem("schtasks.exe", &["/Query", "/FO", "CSV", "/V", "/NH"])?;
+    if listing.trim().is_empty() {
+        return None;
+    }
     parse_tasks(&listing, path)
 }
 
