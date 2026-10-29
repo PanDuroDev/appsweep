@@ -109,7 +109,12 @@ fn main() {
         options,
         Box::new(move |cc| {
             theme::load_fonts(&cc.egui_ctx);
-            theme::apply(&cc.egui_ctx, settings.theme, settings.accent, settings.density);
+            theme::apply(
+                &cc.egui_ctx,
+                settings.theme,
+                settings.accent,
+                settings.density,
+            );
             Ok(Box::new(ui::AppSweep::new(cc, settings)))
         }),
     );
