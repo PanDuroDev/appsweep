@@ -1545,6 +1545,7 @@ fn capture_process_output(command_line: &str) -> Option<(Vec<u8>, u32)> {
     let mut chunk = [0u8; 4096];
     let mut pipe_open = true;
     let mut timed_out = false;
+    let mut truncated = false;
 
     loop {
         if Instant::now() >= deadline {
@@ -1584,9 +1585,15 @@ fn capture_process_output(command_line: &str) -> Option<(Vec<u8>, u32)> {
                 };
                 if read_ok == 0 || received == 0 {
                     pipe_open = false;
-                } else if data.len() < OUTPUT_LIMIT {
+                } else {
+                    truncated = true;
+                }
+                if data.len() < OUTPUT_LIMIT {
                     let retain = (OUTPUT_LIMIT - data.len()).min(received as usize);
                     data.extend_from_slice(&chunk[..retain]);
+                    if retain < received as usize {
+                        truncated = true;
+                    }
                 }
                 // Continue draining after the capture limit so a verbose child
                 // cannot block forever because its pipe buffer is full.
@@ -1617,7 +1624,9 @@ fn capture_process_output(command_line: &str) -> Option<(Vec<u8>, u32)> {
         let _ = CloseHandle(info.h_process);
         let _ = CloseHandle(read_pipe);
     }
-    if timed_out || !exited {
+    // A truncated output can look like a complete scheduled-task listing, which
+    // could let cleanup delete the installation while leaving tasks behind.
+    if timed_out || !exited || truncated {
         None
     } else {
         Some((data, exit_code))
@@ -3336,9 +3345,9 @@ fn parse_tasks(listing: &str, folder: &str) -> Vec<String> {
         if key == "TaskName" {
             task_name = value.to_string();
         } else if key == "Task To Run" {
-            // Only the command counts: an author, comment or trigger that merely
-            // mentions the folder owns nothing.
-            task_hit = command_targets_folder(folder, value);
+            // A task can have multiple actions; any command under the target
+            // folder makes the task related. Metadata/arguments alone do not.
+            task_hit |= command_targets_folder(folder, value);
         }
     }
     flush(&mut task_name, &mut task_hit, &mut result);
@@ -3348,6 +3357,9 @@ fn parse_tasks(listing: &str, folder: &str) -> Vec<String> {
 /// `None` when the task list could not be read at all; an empty list is a real
 /// "this folder has no tasks".
 pub fn tasks_under(path: &str) -> Option<Vec<String>> {
+    if path.trim().is_empty() {
+        return None;
+    }
     let listing = capture_command_oem("schtasks.exe", &["/Query", "/FO", "LIST", "/V"])?;
     Some(parse_tasks(&listing, path))
 }
@@ -3391,6 +3403,14 @@ pub fn ensure_dir(path: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_discovery_rejects_blank_paths_and_matches_any_task_action() {
+        assert_eq!(tasks_under("   "), None);
+        let listing = "TaskName: \\Demo\\First\nTask To Run: C:\\Apps\\Foobar\\tool.exe\nTask To Run: C:\\Apps\\Foo\\tool.exe\n\n";
+        assert_eq!(parse_tasks(listing, r"C:\Apps\Foo"), vec![r"\\Demo\\First"]);
+        assert!(parse_tasks(listing, "  ").is_empty());
+    }
 
     #[test]
     fn unsupported_namespace_paths_fail_closed_for_destructive_operations() {
