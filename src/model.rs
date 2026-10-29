@@ -56,15 +56,25 @@ pub fn is_protected_dir(dir: &std::path::Path) -> bool {
         }
     }
 
-    for g in guarded {
+    for g in &guarded {
         if g.is_empty() {
             continue;
         }
-        if target == g || g.starts_with(&format!("{}\\", target)) {
+        if target == *g || g.starts_with(&format!("{}\\", target)) {
             return true;
         }
     }
-    false
+    // Inside Windows nothing is an app folder, so the whole subtree is off
+    // limits. Program Files, Users and ProgramData keep only the shallow rule
+    // above: apps really do live one level down in those.
+    let mut deep: Vec<String> = vec![r"c:\windows".into()];
+    for var in ["SystemRoot", "windir"] {
+        if let Ok(v) = std::env::var(var) {
+            deep.push(norm(&v));
+        }
+    }
+    deep.iter()
+        .any(|g| !g.is_empty() && target.starts_with(&format!("{}\\", g)))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -95,6 +105,7 @@ impl Source {
 pub enum Arch {
     X64,
     X86,
+    Arm32,
     Arm64,
     Neutral,
 }
@@ -104,6 +115,7 @@ impl Arch {
         match self {
             Arch::X64 => "x64",
             Arch::X86 => "x86",
+            Arch::Arm32 => "ARM32",
             Arch::Arm64 => "ARM64",
             Arch::Neutral => "—",
         }
@@ -218,7 +230,10 @@ impl AppEntry {
             .as_ref()
             .map(|e| !e.exists())
             .unwrap_or(true);
-        dir_gone && exe_gone && self.icon_path.is_none()
+        // The icon is not evidence either way: the scanner stores the launch
+        // exe (or the uninstaller) as the icon source, so an entry with a dead
+        // path always has one and was never reported as a remnant.
+        dir_gone && exe_gone
     }
 
     /// Returns the Arabic reason when deleting this entry would be dangerous.
@@ -332,6 +347,22 @@ mod tests {
     }
 
     #[test]
+    fn nothing_inside_windows_is_an_app_folder() {
+        // A registry entry pointing at a Windows subfolder used to pass the
+        // guard: only the Windows folder itself was blocked, not its children.
+        for p in [
+            r"C:\Windows\System32\drivers",
+            r"C:\Windows\System32\DriverStore\FileRepository",
+            r"C:\Windows\Temp\SomeApp",
+            r"C:\Windows\assembly",
+        ] {
+            assert!(is_protected_dir(Path::new(p)), "{p} must be protected");
+        }
+        // A sibling folder whose name merely starts with "Windows" is an app.
+        assert!(!is_protected_dir(Path::new(r"C:\WindowsApps\Demo")));
+    }
+
+    #[test]
     fn remnant_needs_a_missing_install() {
         let mut e = AppEntry::new(1, "Gone".into(), Source::Registry);
         assert!(e.is_remnant());
@@ -343,10 +374,31 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_icon_path_does_not_hide_a_remnant() {
+        // The scanner copies the launch exe into `icon_path`, so a dead install
+        // used to look alive only because that string was still set.
+        let mut e = AppEntry::new(3, "Orphan".into(), Source::Registry);
+        let gone = |name: &str| std::env::temp_dir().join(format!("appsweep-gone-{name}"));
+        e.install_dir = Some(gone("dir"));
+        e.launch_exe = Some(gone("app.exe"));
+        e.icon_path = Some(gone("app.exe"));
+        assert!(e.is_remnant());
+    }
+
+    #[test]
     fn every_enum_variant_has_a_label() {
-        for a in [Arch::X64, Arch::X86, Arch::Arm64, Arch::Neutral] {
+        for a in [
+            Arch::X64,
+            Arch::X86,
+            Arch::Arm32,
+            Arch::Arm64,
+            Arch::Neutral,
+        ] {
             assert!(!a.text().is_empty());
         }
+        // ARMv7 must not be shown as ARM64: one is 32-bit, the other is not.
+        assert_eq!(Arch::Arm32.text(), "ARM32");
+        assert_ne!(Arch::Arm32.text(), Arch::Arm64.text());
         for s in [Source::Registry, Source::Uwp, Source::Shortcut] {
             assert!(!s.label().is_empty());
             assert!(!s.short().is_empty());

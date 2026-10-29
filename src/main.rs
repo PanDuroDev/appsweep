@@ -8,6 +8,7 @@ mod scan;
 mod settings;
 mod theme;
 mod ui;
+mod userdata;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -33,9 +34,14 @@ fn main() {
             .unwrap_or_else(|| "C:\\Program Files\\Git".to_string());
         let found = native::tasks_under(&path);
         println!("path: {}", path);
-        println!("count: {}", found.len());
-        for t in &found {
-            println!("  {}", t);
+        match &found {
+            Some(tasks) => {
+                println!("count: {}", tasks.len());
+                for t in tasks {
+                    println!("  {}", t);
+                }
+            }
+            None => println!("count: unknown (schtasks could not be read)"),
         }
         return;
     }

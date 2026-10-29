@@ -86,6 +86,12 @@ const SERVICE_QUERY_CONFIG: u32 = 0x0001;
 const SERVICE_STOP: u32 = 0x0020;
 const DELETE_ACCESS: u32 = 0x0001_0000;
 const SERVICE_QUERY_STATUS: u32 = 0x0004;
+const WAIT_OBJECT_0: u32 = 0;
+const WAIT_FAILED: u32 = 0xFFFF_FFFF;
+const ERROR_INVALID_HANDLE: u32 = 6;
+const ERROR_FILE_NOT_FOUND: u32 = 2;
+const ERROR_PATH_NOT_FOUND: u32 = 3;
+const ERROR_INVALID_NAME: u32 = 123;
 const SERVICE_CONTROL_STOP: u32 = 0x0001;
 const SERVICE_STOPPED: u32 = 1;
 const SERVICE_WIN32: u32 = 0x0030;
@@ -380,8 +386,8 @@ struct RestorePointInfoW {
 
 #[repr(C)]
 struct StateManagerStatus {
-    event_type: u32,
-    restore_point_type: u32,
+    // Windows reports the failure reason here, not in GetLastError.
+    status: u32,
     sequence_number: i64,
 }
 
@@ -690,12 +696,15 @@ fn normalize_path(path: &str) -> String {
 }
 
 fn is_under_normalized(folder: &str, candidate: &str) -> bool {
-    let folder = folder.trim_end_matches(|ch| ch == '\\' || ch == '/');
+    let folder = folder.trim_end_matches(['\\', '/']);
     if folder.is_empty() || candidate.len() < folder.len() || !candidate.starts_with(folder) {
         return false;
     }
     candidate.len() == folder.len()
-        || candidate.as_bytes().get(folder.len()).is_some_and(|c| *c == b'\\' || *c == b'/')
+        || candidate
+            .as_bytes()
+            .get(folder.len())
+            .is_some_and(|c| *c == b'\\' || *c == b'/')
 }
 
 pub fn path_is_under(folder: &str, candidate: &str) -> bool {
@@ -730,7 +739,10 @@ pub fn command_executable(command_line: &str) -> String {
     };
 
     let normalized = long_path(executable);
-    normalized.strip_prefix(r"\\?\").unwrap_or(&normalized).to_string()
+    normalized
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&normalized)
+        .to_string()
 }
 
 pub fn is_elevated() -> bool {
@@ -827,7 +839,9 @@ fn icon_to_bgra(icon: Handle, width: i32, height: i32) -> Option<Vec<u8>> {
     if icon.is_null() || width <= 0 || height <= 0 {
         return None;
     }
-    let byte_len = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+    let byte_len = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
     unsafe {
         let screen = GetDC(null_mut());
         if screen.is_null() {
@@ -848,11 +862,23 @@ fn icon_to_bgra(icon: Handle, width: i32, height: i32) -> Option<Vec<u8>> {
                 bi_clr_used: 0,
                 bi_clr_important: 0,
             },
-            bmi_colors: [RgbQuad { blue: 0, green: 0, red: 0, reserved: 0 }],
+            bmi_colors: [RgbQuad {
+                blue: 0,
+                green: 0,
+                red: 0,
+                reserved: 0,
+            }],
         };
 
         let mut bits = null_mut();
-        let dib = CreateDIBSection(screen, &bitmap_info, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+        let dib = CreateDIBSection(
+            screen,
+            &bitmap_info,
+            DIB_RGB_COLORS,
+            &mut bits,
+            null_mut(),
+            0,
+        );
         let memory_dc = CreateCompatibleDC(screen);
         let _ = ReleaseDC(null_mut(), screen);
         if dib.is_null() || memory_dc.is_null() || bits.is_null() {
@@ -867,7 +893,17 @@ fn icon_to_bgra(icon: Handle, width: i32, height: i32) -> Option<Vec<u8>> {
 
         let old_object = SelectObject(memory_dc, dib);
         std::ptr::write_bytes(bits as *mut u8, 0, byte_len);
-        let drawn = DrawIconEx(memory_dc, 0, 0, icon, width, height, 0, null_mut(), DI_NORMAL) != 0;
+        let drawn = DrawIconEx(
+            memory_dc,
+            0,
+            0,
+            icon,
+            width,
+            height,
+            0,
+            null_mut(),
+            DI_NORMAL,
+        ) != 0;
         let mut bgra = vec![0u8; byte_len];
         if drawn {
             std::ptr::copy_nonoverlapping(bits as *const u8, bgra.as_mut_ptr(), byte_len);
@@ -882,7 +918,11 @@ fn icon_to_bgra(icon: Handle, width: i32, height: i32) -> Option<Vec<u8>> {
 }
 
 pub fn extract_icon(path: &str, size: u32) -> Option<RawIcon> {
-    let requested = if size == 0 { 64 } else { size.clamp(1, 512) as i32 };
+    let requested = if size == 0 {
+        64
+    } else {
+        size.clamp(1, 512) as i32
+    };
     let wide_path = wide(path);
     let mut icon = null_mut();
 
@@ -914,12 +954,7 @@ pub fn extract_icon(path: &str, size: u32) -> Option<RawIcon> {
                         u32,
                         *mut Handle,
                     ) -> HResult = transmute((*vtable).methods[10]);
-                    let _ = get_icon(
-                        image_list,
-                        info.i_icon,
-                        ILD_TRANSPARENT,
-                        &mut icon,
-                    );
+                    let _ = get_icon(image_list, info.i_icon, ILD_TRANSPARENT, &mut icon);
                 }
                 release_com_object(image_list);
             }
@@ -997,13 +1032,18 @@ pub fn extract_icon(path: &str, size: u32) -> Option<RawIcon> {
         let bgra = pixels?;
         let mut rgba = vec![0u8; bgra.len()];
         let mut any_alpha = false;
-        for pixel in bgra.chunks_exact(4) {
+        for pixel in bgra.as_chunks::<4>().0 {
             if pixel[3] != 0 {
                 any_alpha = true;
                 break;
             }
         }
-        for (src, dst) in bgra.chunks_exact(4).zip(rgba.chunks_exact_mut(4)) {
+        for (src, dst) in bgra
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(rgba.as_chunks_mut::<4>().0.iter_mut())
+        {
             dst[0] = src[2];
             dst[1] = src[1];
             dst[2] = src[0];
@@ -1035,7 +1075,11 @@ pub fn open_in_explorer(path: &str, select: bool) -> i32 {
             null(),
             SW_SHOWNORMAL,
         );
-        if result > 32 { 0 } else { result as i32 }
+        if result > 32 {
+            0
+        } else {
+            result as i32
+        }
     }
 }
 
@@ -1043,7 +1087,10 @@ pub fn show_properties(path: &str) -> i32 {
     let verb = wide("properties");
     let file = wide(path);
     let initialized = unsafe {
-        CoInitializeEx(null_mut(), COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) >= 0
+        CoInitializeEx(
+            null_mut(),
+            COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE,
+        ) >= 0
     };
     let mut info: ShellExecuteInfoW = unsafe { zeroed() };
     info.cb_size = size_of::<ShellExecuteInfoW>() as u32;
@@ -1087,7 +1134,11 @@ pub fn shell_open(what: &str) -> i32 {
             null(),
             SW_SHOWNORMAL,
         );
-        if result > 32 { 0 } else { result as i32 }
+        if result > 32 {
+            0
+        } else {
+            result as i32
+        }
     }
 }
 
@@ -1122,7 +1173,9 @@ fn start_process(
             0,
             if hidden { CREATE_NO_WINDOW } else { 0 },
             null_mut(),
-            current_directory_wide.as_ref().map_or(null(), |v| v.as_ptr()),
+            current_directory_wide
+                .as_ref()
+                .map_or(null(), |v| v.as_ptr()),
             &startup,
             &mut info,
         )
@@ -1134,26 +1187,54 @@ fn start_process(
     }
 }
 
+/// Waits for a started process and reads its exit code. A failed wait or a
+/// failed exit-code query is a failure, not a silent zero: callers treat a
+/// non-zero return as "did not finish", so it must never be faked.
+unsafe fn finish_process(process: Handle, wait: bool, code: &mut u32) -> i32 {
+    if !wait {
+        return 0;
+    }
+    let waited = WaitForSingleObject(process, INFINITE);
+    if waited != WAIT_OBJECT_0 {
+        let error = GetLastError();
+        return if error == 0 {
+            WAIT_FAILED as i32
+        } else {
+            error as i32
+        };
+    }
+    if GetExitCodeProcess(process, code) == 0 {
+        let error = GetLastError();
+        return if error == 0 {
+            WAIT_FAILED as i32
+        } else {
+            error as i32
+        };
+    }
+    0
+}
+
 pub fn run_cmd(command_line: &str, wait: bool) -> (i32, u32) {
     let info = match start_process(None, command_line, None, true) {
         Ok(info) => info,
         Err(error) => return (error as i32, 0),
     };
     let mut code = 0u32;
-    unsafe {
-        if wait {
-            let _ = WaitForSingleObject(info.h_process, INFINITE);
-            let _ = GetExitCodeProcess(info.h_process, &mut code);
-        }
+    let failure = unsafe {
+        let failure = finish_process(info.h_process, wait, &mut code);
         let _ = CloseHandle(info.h_thread);
         let _ = CloseHandle(info.h_process);
-    }
-    (0, code)
+        failure
+    };
+    (failure, code)
 }
 
 fn quote_windows_argument(argument: &str) -> String {
     if !argument.is_empty()
-        && !argument.chars().any(|c| matches!(c, ' ' | '\t' | '\n' | '\u{000b}' | '"'))
+        && !argument.ends_with('\\')
+        && !argument
+            .chars()
+            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\u{000b}' | '"'))
     {
         return argument.to_string();
     }
@@ -1188,15 +1269,13 @@ pub fn run_shell(file: &str, params: &str, cwd: Option<&str>, wait: bool) -> (i3
         Err(error) => return (error as i32, 0),
     };
     let mut code = 0u32;
-    unsafe {
-        if wait {
-            let _ = WaitForSingleObject(info.h_process, INFINITE);
-            let _ = GetExitCodeProcess(info.h_process, &mut code);
-        }
+    let failure = unsafe {
+        let failure = finish_process(info.h_process, wait, &mut code);
         let _ = CloseHandle(info.h_thread);
         let _ = CloseHandle(info.h_process);
-    }
-    (0, code)
+        failure
+    };
+    (failure, code)
 }
 
 pub fn run_elevated(file: &str, params: &str, cwd: Option<&str>, wait: bool) -> (i32, u32) {
@@ -1205,7 +1284,10 @@ pub fn run_elevated(file: &str, params: &str, cwd: Option<&str>, wait: bool) -> 
     let params_wide = wide(params);
     let cwd_wide = cwd.map(wide);
     let initialized = unsafe {
-        CoInitializeEx(null_mut(), COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) >= 0
+        CoInitializeEx(
+            null_mut(),
+            COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE,
+        ) >= 0
     };
     let mut info: ShellExecuteInfoW = unsafe { zeroed() };
     info.cb_size = size_of::<ShellExecuteInfoW>() as u32;
@@ -1221,14 +1303,18 @@ pub fn run_elevated(file: &str, params: &str, cwd: Option<&str>, wait: bool) -> 
             (GetLastError() as i32, 0)
         } else {
             let mut code = 0u32;
-            if !info.h_process.is_null() {
+            if info.h_process.is_null() {
+                // ShellExecuteExW can succeed without a process to wait for.
                 if wait {
-                    let _ = WaitForSingleObject(info.h_process, INFINITE);
-                    let _ = GetExitCodeProcess(info.h_process, &mut code);
+                    (ERROR_INVALID_HANDLE as i32, 0)
+                } else {
+                    (0, 0)
                 }
+            } else {
+                let failure = finish_process(info.h_process, wait, &mut code);
                 let _ = CloseHandle(info.h_process);
+                (failure, code)
             }
-            (0, code)
         }
     };
     if initialized {
@@ -1312,9 +1398,13 @@ pub fn capture_cmd(command_line: &str) -> String {
             &mut info,
         )
     };
-    unsafe { let _ = CloseHandle(write_pipe); }
+    unsafe {
+        let _ = CloseHandle(write_pipe);
+    }
     if created == 0 {
-        unsafe { let _ = CloseHandle(read_pipe); }
+        unsafe {
+            let _ = CloseHandle(read_pipe);
+        }
         return String::new();
     }
 
@@ -1391,7 +1481,10 @@ unsafe fn release_com_object(object: *mut c_void) {
 
 pub fn resolve_shortcut(link_path: &str) -> Option<(String, String, String)> {
     let initialized = unsafe {
-        CoInitializeEx(null_mut(), COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) >= 0
+        CoInitializeEx(
+            null_mut(),
+            COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE,
+        ) >= 0
     };
     let mut link: *mut c_void = null_mut();
     let create_hr = unsafe {
@@ -1449,11 +1542,8 @@ pub fn resolve_shortcut(link_path: &str) -> Option<(String, String, String)> {
             *mut u16,
             i32,
         ) -> HResult = unsafe { transmute((*link_vtable).methods[8]) };
-        let get_arguments: unsafe extern "system" fn(
-            *mut c_void,
-            *mut u16,
-            i32,
-        ) -> HResult = unsafe { transmute((*link_vtable).methods[10]) };
+        let get_arguments: unsafe extern "system" fn(*mut c_void, *mut u16, i32) -> HResult =
+            unsafe { transmute((*link_vtable).methods[10]) };
 
         let _ = unsafe {
             get_path(
@@ -1496,9 +1586,7 @@ pub fn resolve_shortcut(link_path: &str) -> Option<(String, String, String)> {
 fn process_image_path(process: Handle) -> Option<String> {
     let mut image = vec![0u16; 32768];
     let mut length = image.len() as u32;
-    let ok = unsafe {
-        QueryFullProcessImageNameW(process, 0, image.as_mut_ptr(), &mut length)
-    };
+    let ok = unsafe { QueryFullProcessImageNameW(process, 0, image.as_mut_ptr(), &mut length) };
     if ok == 0 || length == 0 {
         return None;
     }
@@ -1510,7 +1598,9 @@ fn count_or_kill_processes(path: &str, terminate: bool) -> i32 {
     if path.trim().is_empty() {
         return 0;
     }
-    let folder = normalize_path(path).trim_end_matches(|ch| ch == '\\' || ch == '/').to_string();
+    let folder = normalize_path(path)
+        .trim_end_matches(['\\', '/'])
+        .to_string();
     if folder.is_empty() {
         return 0;
     }
@@ -1526,8 +1616,8 @@ fn count_or_kill_processes(path: &str, terminate: bool) -> i32 {
     let mut has_entry = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
     while has_entry {
         if entry.th32_process_id != self_id && entry.th32_process_id != 0 {
-            let access = PROCESS_QUERY_LIMITED_INFORMATION
-                | if terminate { PROCESS_TERMINATE } else { 0 };
+            let access =
+                PROCESS_QUERY_LIMITED_INFORMATION | if terminate { PROCESS_TERMINATE } else { 0 };
             let process = unsafe { OpenProcess(access, 0, entry.th32_process_id) };
             if !process.is_null() {
                 if let Some(image) = process_image_path(process) {
@@ -1541,12 +1631,16 @@ fn count_or_kill_processes(path: &str, terminate: bool) -> i32 {
                         }
                     }
                 }
-                unsafe { let _ = CloseHandle(process); }
+                unsafe {
+                    let _ = CloseHandle(process);
+                }
             }
         }
         has_entry = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
     }
-    unsafe { let _ = CloseHandle(snapshot); }
+    unsafe {
+        let _ = CloseHandle(snapshot);
+    }
     count
 }
 
@@ -1578,7 +1672,9 @@ pub fn services_under(path: &str) -> Vec<String> {
     if path.trim().is_empty() {
         return Vec::new();
     }
-    let folder = normalize_path(path).trim_end_matches(|ch| ch == '\\' || ch == '/').to_string();
+    let folder = normalize_path(path)
+        .trim_end_matches(['\\', '/'])
+        .to_string();
     if folder.is_empty() {
         return Vec::new();
     }
@@ -1717,10 +1813,7 @@ fn clear_readonly(path: &Path) {
     unsafe {
         let attributes = GetFileAttributesW(path_wide.as_ptr());
         if attributes != u32::MAX && attributes & FILE_ATTRIBUTE_READONLY != 0 {
-            let _ = SetFileAttributesW(
-                path_wide.as_ptr(),
-                attributes & !FILE_ATTRIBUTE_READONLY,
-            );
+            let _ = SetFileAttributesW(path_wide.as_ptr(), attributes & !FILE_ATTRIBUTE_READONLY);
         }
     }
 }
@@ -1738,12 +1831,7 @@ fn enable_privilege(name: &str) -> bool {
     let process = unsafe { GetCurrentProcess() };
     let mut token = null_mut();
     unsafe {
-        if OpenProcessToken(
-            process,
-            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
-            &mut token,
-        ) == 0
-        {
+        if OpenProcessToken(process, TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &mut token) == 0 {
             return false;
         }
     }
@@ -1753,9 +1841,8 @@ fn enable_privilege(name: &str) -> bool {
         low_part: 0,
         high_part: 0,
     };
-    let looked_up = unsafe {
-        LookupPrivilegeValueW(null(), privilege_name.as_ptr(), &mut luid) != 0
-    };
+    let looked_up =
+        unsafe { LookupPrivilegeValueW(null(), privilege_name.as_ptr(), &mut luid) != 0 };
     if !looked_up {
         unsafe {
             let _ = CloseHandle(token);
@@ -1864,7 +1951,11 @@ fn restore_security(path: &Path, saved: &SavedSecurity) -> bool {
     let path_wide = wide(&long_path(&path.to_string_lossy()));
     let security_info = OWNER_SECURITY_INFORMATION
         | GROUP_SECURITY_INFORMATION
-        | if present != 0 { DACL_SECURITY_INFORMATION } else { 0 };
+        | if present != 0 {
+            DACL_SECURITY_INFORMATION
+        } else {
+            0
+        };
     unsafe {
         SetNamedSecurityInfoW(
             path_wide.as_ptr() as *mut u16,
@@ -1959,19 +2050,18 @@ fn take_ownership(path: &Path) -> bool {
 }
 
 fn acl_snapshot_and_relax(path: &Path) -> Option<SavedSecurity> {
-    let saved = save_security(path);
-    // The original attempts the ownership/ACL change even when saving the
-    // descriptor fails. It restores the descriptor only when one was captured.
+    // Without a snapshot there is no way back, so the owner and DACL are left
+    // untouched: a failed delete must never leave changed security behind.
+    let saved = save_security(path)?;
     let _ = take_ownership(path);
-    saved
+    Some(saved)
 }
 
-fn restore_acl_snapshot(path: &Path, snapshot: &SavedSecurity) {
+fn restore_acl_snapshot(path: &Path, snapshot: &SavedSecurity) -> bool {
     // Do not gate restoration on Path::exists(): access-denied metadata can
     // report false even while the object survives and its ACL must be restored.
-    let _ = restore_security(path, snapshot);
+    restore_security(path, snapshot)
 }
-
 
 fn remove_object(path: &Path) -> std::io::Result<()> {
     let path_wide = wide(&long_path(&path.to_string_lossy()));
@@ -2028,12 +2118,16 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
                     stats.deleted += 1;
                     return;
                 }
-                if let Some(snapshot) = snapshot {
-                    restore_acl_snapshot(path, &snapshot);
-                }
+                let restored = snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| restore_acl_snapshot(path, snapshot));
                 stats.failed += 1;
                 if stats.first_error.is_empty() {
-                    stats.first_error = format!("{} (dir)", path.display());
+                    stats.first_error = if snapshot.is_some() && !restored {
+                        format!("{} (dir; permissions were not restored)", path.display())
+                    } else {
+                        format!("{} (dir)", path.display())
+                    };
                 }
             }
         }
@@ -2048,12 +2142,16 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
                     stats.deleted += 1;
                     return;
                 }
-                if let Some(snapshot) = snapshot {
-                    restore_acl_snapshot(path, &snapshot);
-                }
+                let restored = snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| restore_acl_snapshot(path, snapshot));
                 stats.failed += 1;
                 if stats.first_error.is_empty() {
-                    stats.first_error = format!("{} (file)", path.display());
+                    stats.first_error = if snapshot.is_some() && !restored {
+                        format!("{} (file; permissions were not restored)", path.display())
+                    } else {
+                        format!("{} (file)", path.display())
+                    };
                 }
             }
         }
@@ -2068,7 +2166,7 @@ pub struct DeleteReport {
 
 fn is_root_path(path: &str) -> bool {
     let normalized = path.replace('/', "\\");
-    let trimmed = normalized.trim_end_matches(|ch| ch == '\\' || ch == '/');
+    let trimmed = normalized.trim_end_matches(['\\', '/']);
     if trimmed.is_empty() {
         return true;
     }
@@ -2151,19 +2249,7 @@ pub fn grants_everyone_full_control(path: &str) -> i32 {
     };
     let mut everyone = null_mut();
     let allocated = unsafe {
-        AllocateAndInitializeSid(
-            &world_authority,
-            1,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            &mut everyone,
-        )
+        AllocateAndInitializeSid(&world_authority, 1, 0, 0, 0, 0, 0, 0, 0, 0, &mut everyone)
     };
     if allocated == 0 || everyone.is_null() {
         return -1;
@@ -2198,12 +2284,7 @@ pub fn grants_everyone_full_control(path: &str) -> i32 {
     let mut defaulted = 0;
     let mut actual_dacl = null_mut();
     let descriptor_valid = unsafe {
-        GetSecurityDescriptorDacl(
-            descriptor,
-            &mut present,
-            &mut actual_dacl,
-            &mut defaulted,
-        ) != 0
+        GetSecurityDescriptorDacl(descriptor, &mut present, &mut actual_dacl, &mut defaulted) != 0
     };
     let mut verdict = 0;
     if descriptor_valid && present != 0 && !actual_dacl.is_null() {
@@ -2242,19 +2323,7 @@ pub fn grant_everyone_full_control(path: &str) -> i32 {
     };
     let mut everyone = null_mut();
     let allocated = unsafe {
-        AllocateAndInitializeSid(
-            &world_authority,
-            1,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            &mut everyone,
-        )
+        AllocateAndInitializeSid(&world_authority, 1, 0, 0, 0, 0, 0, 0, 0, 0, &mut everyone)
     };
     if allocated == 0 || everyone.is_null() {
         return unsafe { GetLastError() as i32 };
@@ -2305,6 +2374,83 @@ pub fn path_exists(path: &str) -> bool {
     unsafe { GetFileAttributesW(path_wide.as_ptr()) != u32::MAX }
 }
 
+/// `Some(true)` there, `Some(false)` confirmed missing, `None` inaccessible.
+/// Access denied must not read as "already gone".
+pub fn path_state(path: &str) -> Option<bool> {
+    // An empty path is nothing to ask about, not proof of absence.
+    if path.trim().is_empty() {
+        return None;
+    }
+    let w = wide(&long_path(path));
+    if unsafe { GetFileAttributesW(w.as_ptr()) } != u32::MAX {
+        return Some(true);
+    }
+    // Only the "not found" codes mean gone; access denied stays unknown.
+    match unsafe { GetLastError() } {
+        ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND | ERROR_INVALID_NAME => Some(false),
+        _ => None,
+    }
+}
+
+pub fn service_exists(name: &str) -> Option<bool> {
+    let w = wide(name);
+    unsafe {
+        let manager = OpenSCManagerW(null(), null(), SC_MANAGER_CONNECT);
+        if manager.is_null() {
+            return None;
+        }
+        let service = OpenServiceW(manager, w.as_ptr(), SERVICE_QUERY_STATUS);
+        let found = !service.is_null();
+        let reason = GetLastError();
+        if found {
+            let _ = CloseServiceHandle(service);
+        }
+        let _ = CloseServiceHandle(manager);
+        if found {
+            Some(true)
+        } else if reason == 1060 {
+            // ERROR_SERVICE_DOES_NOT_EXIST; anything else is "could not ask".
+            Some(false)
+        } else {
+            None
+        }
+    }
+}
+
+/// `Some(true)` the package is still registered for the current user,
+/// `Some(false)` confirmed gone, `None` could not ask.
+pub fn package_registered(full_name: &str) -> Option<bool> {
+    use windows::core::HSTRING;
+    use windows::Management::Deployment::PackageManager;
+    let sid = current_user_sid();
+    if sid.is_empty() {
+        return None;
+    }
+    let pm = PackageManager::new().ok()?;
+    let list = pm
+        .FindPackagesByUserSecurityId(&HSTRING::from(sid.as_str()))
+        .ok()?;
+    for pkg in list {
+        // A missing ID on one rogue entry is not proof the rest are gone.
+        let Ok(id) = pkg.Id() else { continue };
+        let Ok(name) = id.FullName() else { continue };
+        if name.to_string_lossy().eq_ignore_ascii_case(full_name) {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
+pub fn task_exists(name: &str) -> Option<bool> {
+    let command = format!("schtasks.exe /Query /TN \"{}\"", name);
+    let (launched, code) = run_cmd(&command, true);
+    if launched != 0 {
+        return None;
+    }
+    // schtasks exits 0 for a task that exists and non-zero for one that does not.
+    Some(code == 0)
+}
+
 pub fn delete_on_reboot(path: &str) -> i32 {
     let normalized = long_path(path);
     let path_wide = wide(&normalized);
@@ -2317,24 +2463,25 @@ pub fn delete_on_reboot(path: &str) -> i32 {
     }
 }
 
-pub fn create_restore_point(description: &str) -> i32 {
+/// Returns the error code (0 on success) and the point's sequence number.
+pub fn create_restore_point(description: &str) -> (i32, i64) {
     type RestoreFn =
         unsafe extern "system" fn(*mut RestorePointInfoW, *mut StateManagerStatus) -> Bool;
     unsafe {
         let library = wide("srclient.dll");
         let module = LoadLibraryW(library.as_ptr());
         if module.is_null() {
-            return GetLastError() as i32;
+            return (GetLastError() as i32, 0);
         }
         let symbol = GetProcAddress(module, c"SRSetRestorePointW".as_ptr());
         if symbol.is_null() {
             let _ = FreeLibrary(module);
-            return 127; // ERROR_PROC_NOT_FOUND
+            return (127, 0); // ERROR_PROC_NOT_FOUND
         }
         let restore: RestoreFn = transmute(symbol);
         let mut info: RestorePointInfoW = zeroed();
         info.event_type = 100; // BEGIN_SYSTEM_CHANGE
-        info.restore_point_type = 0; // APPLICATION_INSTALL
+        info.restore_point_type = 1; // APPLICATION_UNINSTALL
         let mut status: StateManagerStatus = zeroed();
         for (index, unit) in description
             .encode_utf16()
@@ -2344,9 +2491,13 @@ pub fn create_restore_point(description: &str) -> i32 {
             info.description[index] = unit;
         }
         let ok = restore(&mut info, &mut status) != 0;
-        let error = if ok { 0 } else { GetLastError() as i32 };
+        // On failure the reason is in nStatus; GetLastError is not the source.
+        let error = if ok { 0 } else { status.status as i32 };
+        // Frequency suppression reuses an existing point and returns its
+        // sequence, so a non-zero sequence only proves a point exists.
+        let sequence = if ok { status.sequence_number } else { 0 };
         let _ = FreeLibrary(module);
-        error
+        (error, sequence)
     }
 }
 
@@ -2358,29 +2509,87 @@ pub fn delete_scheduled_task(name: &str) -> i32 {
     run_cmd(&command, true).0
 }
 
-fn capture_command_oem(program: &str, arguments: &[&str]) -> String {
+fn capture_command_oem(program: &str, arguments: &[&str]) -> Option<String> {
     let mut command = Command::new(program);
     command.args(arguments).creation_flags(CREATE_NO_WINDOW);
-    let Ok(output) = command.output() else {
-        return String::new();
-    };
-    decode_multibyte(&output.stdout, CP_OEMCP, 0)
-        .or_else(|| decode_multibyte(&output.stdout, CP_ACP, 0))
-        .unwrap_or_else(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    let output = command.output().ok()?;
+    // A query that failed did not find "nothing" - it did not run.
+    if !output.status.success() {
+        return None;
+    }
+    Some(
+        decode_multibyte(&output.stdout, CP_OEMCP, 0)
+            .or_else(|| decode_multibyte(&output.stdout, CP_ACP, 0))
+            .unwrap_or_else(|| String::from_utf8_lossy(&output.stdout).into_owned()),
+    )
 }
 
-pub fn tasks_under(path: &str) -> Vec<String> {
-    let mut needle = long_path(path).to_lowercase();
-    if let Some(unprefixed) = needle.strip_prefix(r"\\?\") {
-        needle = unprefixed.to_string();
+/// Quoted or whitespace-separated tokens of a command line.
+fn command_arguments(command_line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    for ch in command_line.chars() {
+        match ch {
+            '"' => quoted = !quoted,
+            ' ' | '\t' if !quoted => {
+                if !current.is_empty() {
+                    out.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
     }
-    let text = capture_command_oem("schtasks.exe", &["/Query", "/FO", "LIST", "/V"]);
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+/// A task belongs to the app when its command starts an executable in the app
+/// folder, or hands a path in that folder to a script host. A sibling such as
+/// `Demo2` is not inside `Demo`.
+fn command_targets_folder(folder: &str, command_line: &str) -> bool {
+    let executable = command_executable(command_line);
+    if executable.is_empty() {
+        return false;
+    }
+    if path_is_under(folder, &executable) {
+        return true;
+    }
+    let name = executable
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or_default()
+        .to_lowercase();
+    if !matches!(
+        name.as_str(),
+        "cmd.exe"
+            | "powershell.exe"
+            | "pwsh.exe"
+            | "wscript.exe"
+            | "cscript.exe"
+            | "mshta.exe"
+            | "python.exe"
+            | "py.exe"
+            | "node.exe"
+    ) {
+        return false;
+    }
+    command_arguments(command_line)
+        .iter()
+        .any(|argument| path_is_under(folder, argument))
+}
+
+/// Named tasks in a `schtasks /Query /FO LIST /V` listing whose command runs
+/// something inside `folder`.
+fn parse_tasks(listing: &str, folder: &str) -> Vec<String> {
     let mut result = Vec::new();
     let mut task_name = String::new();
     let mut task_hit = false;
 
     let flush = |task_name: &mut String, task_hit: &mut bool, result: &mut Vec<String>| {
-        if !task_name.is_empty() && *task_hit && result.len() < 64 {
+        if !task_name.is_empty() && *task_hit {
             result.push(std::mem::take(task_name));
         } else {
             task_name.clear();
@@ -2388,8 +2597,8 @@ pub fn tasks_under(path: &str) -> Vec<String> {
         *task_hit = false;
     };
 
-    for original_line in text.lines() {
-        let line = original_line.trim_end_matches(|ch| ch == '\r' || ch == ' ');
+    for original_line in listing.lines() {
+        let line = original_line.trim_end_matches(['\r', ' ']);
         if line.is_empty() {
             flush(&mut task_name, &mut task_hit, &mut result);
             continue;
@@ -2401,12 +2610,21 @@ pub fn tasks_under(path: &str) -> Vec<String> {
         let value = line[colon + 1..].trim_start();
         if key == "TaskName" {
             task_name = value.to_string();
-        } else if value.to_lowercase().contains(&needle) {
-            task_hit = true;
+        } else if key == "Task To Run" {
+            // Only the command counts: an author, comment or trigger that merely
+            // mentions the folder owns nothing.
+            task_hit = command_targets_folder(folder, value);
         }
     }
     flush(&mut task_name, &mut task_hit, &mut result);
     result
+}
+
+/// `None` when the task list could not be read at all; an empty list is a real
+/// "this folder has no tasks".
+pub fn tasks_under(path: &str) -> Option<Vec<String>> {
+    let listing = capture_command_oem("schtasks.exe", &["/Query", "/FO", "LIST", "/V"])?;
+    Some(parse_tasks(&listing, path))
 }
 
 pub fn path_size(path: &str) -> u64 {
@@ -2464,10 +2682,7 @@ mod tests {
             long_path(r"\\server\share\Demo"),
             r"\\?\UNC\server\share\Demo"
         );
-        assert_eq!(
-            long_path(r"\\?\C:\Apps\Demo"),
-            r"\\?\C:\Apps\Demo"
-        );
+        assert_eq!(long_path(r"\\?\C:\Apps\Demo"), r"\\?\C:\Apps\Demo");
     }
 
     #[test]
@@ -2481,7 +2696,10 @@ mod tests {
         assert!(!path_is_under(r"C:\Apps\Foo", r"C:\Apps\Fo"));
         assert!(!path_is_under(r"C:\Apps\Foo", r"D:\Tools\Foo\a.exe"));
         assert!(!path_is_under(r"C:\Apps\Foo", ""));
-        assert!(path_is_under(r"\\server\share\Foo", r"\\server\share\Foo\a.exe"));
+        assert!(path_is_under(
+            r"\\server\share\Foo",
+            r"\\server\share\Foo\a.exe"
+        ));
     }
 
     #[test]
@@ -2493,8 +2711,12 @@ mod tests {
         assert!(is_root_path(r"\\?\C:\"));
         assert!(is_root_path(r"\\?\UNC\server\share"));
         assert!(is_root_path(r"\\?\unc\server\share"));
-        assert!(is_root_path(r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\"));
-        assert!(is_root_path(r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1"));
+        assert!(is_root_path(
+            r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\"
+        ));
+        assert!(is_root_path(
+            r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1"
+        ));
         assert!(is_root_path(r"\\?\Device\HarddiskVolume1"));
         assert!(!is_root_path(r"C:\Apps\Demo"));
         assert!(!is_root_path(r"\\server\share\Demo"));
@@ -2522,9 +2744,69 @@ mod tests {
     }
 
     #[test]
+    fn a_task_belongs_to_the_folder_only_through_its_command() {
+        let folder = r"C:\Apps\Demo";
+        assert!(command_targets_folder(
+            folder,
+            r"C:\Apps\Demo\app.exe --silent"
+        ));
+        assert!(command_targets_folder(
+            folder,
+            r#"cmd.exe /c "C:\Apps\Demo\run.bat""#
+        ));
+        assert!(command_targets_folder(
+            folder,
+            r"powershell.exe -File C:\Apps\Demo\start.ps1"
+        ));
+        // A sibling folder that merely shares the prefix is not inside it.
+        assert!(!command_targets_folder(folder, r"C:\Apps\Demo2\app.exe"));
+        assert!(!command_targets_folder(
+            folder,
+            r#"cmd.exe /c echo C:\Apps\Demo2\x"#
+        ));
+        assert!(!command_targets_folder(folder, r"C:\Other\app.exe"));
+        assert!(!command_targets_folder(folder, "cmd.exe /c echo hello"));
+        assert!(!command_targets_folder(folder, ""));
+    }
+
+    #[test]
+    fn task_listing_matches_the_command_and_keeps_every_result() {
+        let folder = r"C:\Apps\Demo";
+        // TaskName, Author and Comment mention the folder; only the command can
+        // make a task the app's.
+        let listing = [
+            r"TaskName: \Decoy",
+            r"Author: C:\Apps\Demo\owner",
+            r"Comment: started by C:\Apps\Demo",
+            r"Task To Run: C:\Other\app.exe",
+            "",
+            r"TaskName: \Real",
+            r"Task To Run: C:\Apps\Demo\app.exe /run",
+            "",
+        ]
+        .join("\r\n");
+        assert_eq!(parse_tasks(&listing, folder), vec![r"\Real"]);
+
+        // More than 64 matches used to be dropped silently.
+        let mut many = Vec::new();
+        for index in 0..70 {
+            many.push(format!(r"TaskName: \T{index}"));
+            many.push(r"Task To Run: C:\Apps\Demo\app.exe".to_string());
+            many.push(String::new());
+        }
+        assert_eq!(parse_tasks(&many.join("\r\n"), folder).len(), 70);
+    }
+
+    #[test]
     fn windows_argument_quoting_preserves_spaces_and_trailing_slashes() {
         assert_eq!(quote_windows_argument("plain"), "plain");
-        assert_eq!(quote_windows_argument("task with spaces"), r#""task with spaces""#);
-        assert_eq!(quote_windows_argument(r"C:\Apps\Demo\"), r#""C:\Apps\Demo\\""#);
+        assert_eq!(
+            quote_windows_argument("task with spaces"),
+            r#""task with spaces""#
+        );
+        assert_eq!(
+            quote_windows_argument(r"C:\Apps\Demo\"),
+            r#""C:\Apps\Demo\\""#
+        );
     }
 }
