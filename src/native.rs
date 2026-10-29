@@ -1697,12 +1697,19 @@ fn capture_process_output(command_line: &str) -> Option<(Vec<u8>, u32)> {
         }
 
         match unsafe { WaitForSingleObject(info.h_process, 0) } {
-            WAIT_OBJECT_0 => break,
+            WAIT_OBJECT_0 if !pipe_open => break,
+            WAIT_OBJECT_0 => {
+                // The process may exit before an inherited writer handle is
+                // closed by a descendant. Keep draining until EOF or the same
+                // deadline; never accept potentially incomplete inventory.
+                unsafe { Sleep(POLL_MILLIS) };
+            }
             WAIT_FAILED => {
                 unsafe {
                     let _ = TerminateProcess(info.h_process, 1);
                     let _ = WaitForSingleObject(info.h_process, 1000);
                 }
+                capture_failed = true;
                 break;
             }
             _ => unsafe { Sleep(POLL_MILLIS) },
