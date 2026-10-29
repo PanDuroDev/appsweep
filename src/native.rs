@@ -3,7 +3,7 @@
 
 use std::ffi::{c_char, c_void};
 use std::mem::{size_of, transmute, zeroed};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::ptr::{null, null_mut};
 use std::time::{Duration, Instant};
 
@@ -232,13 +232,15 @@ struct FileAttributeTagInfo {
     reparse_tag: u32,
 }
 
-struct DirectoryHandle(Handle);
+struct DirectoryHandle(Vec<Handle>);
 
 impl Drop for DirectoryHandle {
     fn drop(&mut self) {
-        if !self.0.is_null() && self.0 != -1isize as Handle {
-            unsafe {
-                let _ = CloseHandle(self.0);
+        for handle in self.0.drain(..).rev() {
+            if !handle.is_null() && handle != -1isize as Handle {
+                unsafe {
+                    let _ = CloseHandle(handle);
+                }
             }
         }
     }
@@ -2218,11 +2220,11 @@ fn record_delete_failure(stats: &mut DeleteStats, path: &Path, reason: &str) {
     }
 }
 
-fn open_directory_guard(path: &Path) -> std::io::Result<DirectoryHandle> {
+fn open_guarded_directory_component(path: &Path) -> std::io::Result<Handle> {
     let path_wide = wide(&path.to_string_lossy());
-    // Omitting FILE_SHARE_DELETE pins this directory against rename/replacement
-    // while it is enumerated. OPEN_REPARSE_POINT ensures a swapped junction is
-    // opened as a link and then rejected rather than followed.
+    // Do not allow deletion/rename sharing: while this handle is open, the path
+    // component cannot be replaced. OPEN_REPARSE_POINT prevents following a
+    // junction at this component.
     let handle = unsafe {
         CreateFileW(
             path_wide.as_ptr(),
@@ -2264,10 +2266,67 @@ fn open_directory_guard(path: &Path) -> std::io::Result<DirectoryHandle> {
         }
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "directory changed to a non-directory or reparse point",
+            "path component is not a normal directory",
         ));
     }
-    Ok(DirectoryHandle(handle))
+    Ok(handle)
+}
+
+fn open_directory_guard(path: &Path) -> std::io::Result<DirectoryHandle> {
+    // Pin every component from the volume/share root to the target while using
+    // path-based Rust enumeration. This prevents an attacker from swapping an
+    // ancestor for a junction between validation and read_dir. Any parent-dir
+    // component is rejected instead of being normalized across the guarded path.
+    let mut current = PathBuf::new();
+    let mut handles: Vec<Handle> = Vec::new();
+    for component in path.components() {
+        let should_open = match component {
+            Component::Prefix(prefix) => {
+                current.push(prefix.as_os_str());
+                false
+            }
+            Component::RootDir => {
+                current.push(component.as_os_str());
+                true
+            }
+            Component::CurDir => false,
+            Component::ParentDir => {
+                for handle in handles.drain(..).rev() {
+                    unsafe {
+                        let _ = CloseHandle(handle);
+                    }
+                }
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "parent components are not permitted in a deletion path",
+                ));
+            }
+            Component::Normal(_) => {
+                current.push(component.as_os_str());
+                true
+            }
+        };
+        if should_open {
+            match open_guarded_directory_component(&current) {
+                Ok(handle) => handles.push(handle),
+                Err(error) => {
+                    for handle in handles.drain(..).rev() {
+                        unsafe {
+                            let _ = CloseHandle(handle);
+                        }
+                    }
+                    return Err(error);
+                }
+            }
+        }
+    }
+    if handles.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "deletion path is not absolute",
+        ));
+    }
+    Ok(DirectoryHandle(handles))
 }
 
 fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
