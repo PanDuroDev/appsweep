@@ -66,15 +66,12 @@ extern "C" {
         log: *mut u16,
         logcap: i32,
     ) -> i32;
-    fn as_path_exists(path: *const u16) -> i32;
     fn as_grants_everyone_full_control(path: *const u16) -> i32;
     fn as_grant_everyone_full_control(path: *const u16) -> i32;
     fn as_delete_on_reboot(path: *const u16) -> i32;
     fn as_create_restore_point(desc: *const u16) -> i32;
     fn as_delete_scheduled_task(name: *const u16) -> i32;
     fn as_list_tasks_under(path: *const u16, out: *mut u16, cap: i32) -> i32;
-    fn as_path_size(path: *const u16) -> u64;
-    fn as_ensure_dir(path: *const u16) -> i32;
 }
 
 fn take_string(f: impl FnOnce(*mut u16, i32) -> i32, cap: usize) -> String {
@@ -401,8 +398,7 @@ pub fn grant_everyone_full_control(path: &str) -> i32 {
 }
 
 pub fn path_exists(path: &str) -> bool {
-    let w = wide(path);
-    unsafe { as_path_exists(w.as_ptr()) != 0 }
+    std::fs::symlink_metadata(path).is_ok()
 }
 
 pub fn delete_on_reboot(path: &str) -> i32 {
@@ -421,13 +417,38 @@ pub fn delete_scheduled_task(name: &str) -> i32 {
 }
 
 pub fn path_size(path: &str) -> u64 {
-    let w = wide(path);
-    unsafe { as_path_size(w.as_ptr()) }
+    fn size(path: &std::path::Path, depth: u8) -> u64 {
+        if depth > 8 {
+            return 0;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(path) else {
+            return 0;
+        };
+        if meta.file_type().is_symlink() {
+            return 0;
+        }
+        if meta.is_file() {
+            return meta.len();
+        }
+        if !meta.is_dir() {
+            return 0;
+        }
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return 0;
+        };
+        entries.filter_map(Result::ok)
+            .map(|entry| size(&entry.path(), depth + 1))
+            .sum()
+    }
+    size(std::path::Path::new(path), 0)
 }
 
 pub fn ensure_dir(path: &str) -> i32 {
-    let w = wide(path);
-    unsafe { as_ensure_dir(w.as_ptr()) }
+    match std::fs::create_dir(path) {
+        Ok(()) => 0,
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => 0,
+        Err(err) => err.raw_os_error().unwrap_or(1),
+    }
 }
 
 #[cfg(test)]
