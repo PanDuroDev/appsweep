@@ -3484,6 +3484,7 @@ fn parse_csv_rows(input: &str) -> Option<Vec<Vec<String>>> {
     let mut row = Vec::new();
     let mut field = String::new();
     let mut quoted = false;
+    let mut after_quote = false;
     let mut chars = input.chars().peekable();
 
     while let Some(ch) = chars.next() {
@@ -3494,6 +3495,7 @@ fn parse_csv_rows(input: &str) -> Option<Vec<Vec<String>>> {
                     field.push('"');
                 } else {
                     quoted = false;
+                    after_quote = true;
                 }
             } else {
                 field.push(ch);
@@ -3501,8 +3503,32 @@ fn parse_csv_rows(input: &str) -> Option<Vec<Vec<String>>> {
             continue;
         }
 
+        if after_quote {
+            match ch {
+                ',' => {
+                    row.push(std::mem::take(&mut field));
+                    after_quote = false;
+                }
+                '\r' | '\n' => {
+                    if ch == '\r' && chars.peek() == Some(&'\n') {
+                        chars.next();
+                    }
+                    row.push(std::mem::take(&mut field));
+                    if row.iter().any(|value| !value.is_empty()) {
+                        rows.push(std::mem::take(&mut row));
+                    } else {
+                        row.clear();
+                    }
+                    after_quote = false;
+                }
+                _ => return None,
+            }
+            continue;
+        }
+
         match ch {
             '"' if field.is_empty() => quoted = true,
+            '"' => return None,
             ',' => row.push(std::mem::take(&mut field)),
             '\r' | '\n' => {
                 if ch == '\r' && chars.peek() == Some(&'\n') {
@@ -3522,7 +3548,7 @@ fn parse_csv_rows(input: &str) -> Option<Vec<Vec<String>>> {
     if quoted {
         return None;
     }
-    if !field.is_empty() || !row.is_empty() {
+    if after_quote || !field.is_empty() || !row.is_empty() {
         row.push(field);
         if row.iter().any(|value| !value.is_empty()) {
             rows.push(row);
@@ -3614,6 +3640,7 @@ mod tests {
         assert_eq!(parse_tasks("", r"C:\Apps\Foo"), Some(Vec::new()));
         assert_eq!(parse_tasks(r#""host","incomplete""#, r"C:\Apps\Foo"), None);
         assert_eq!(parse_tasks(r#""host","unterminated"#, r"C:\Apps\Foo"), None);
+        assert_eq!(parse_tasks(r#""host",bad"quote"#, r"C:\Apps\Foo"), None);
     }
 
     #[test]
