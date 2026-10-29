@@ -473,6 +473,10 @@ fn safe_paths(paths: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+fn cleanup_blocked_by_task_discovery(flow: Flow, tasks_unknown: bool) -> bool {
+    tasks_unknown && matches!(flow, Flow::Uninstall | Flow::Purge)
+}
+
 pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bool) -> Vec<Step> {
     let mut steps: Vec<Step> = Vec::new();
     let mut add = |title: &str, detail: &str, op: Op, skip_if_gone: bool, optional: bool| {
@@ -581,7 +585,7 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
     // A purge/uninstall that cannot enumerate scheduled tasks could leave a
     // startup task pointing at the folder we are about to remove. Do not run
     // any partial cleanup unless task discovery was complete.
-    if tasks_unknown && matches!(flow, Flow::Uninstall | Flow::Purge) {
+    if cleanup_blocked_by_task_discovery(flow, tasks_unknown) {
         return vec![Step {
             title: "Cleanup cancelled".into(),
             detail: "Scheduled tasks could not be enumerated, so no changes were made.".into(),
@@ -2296,6 +2300,14 @@ mod tests {
             Verdict::Left(msg) => assert!(msg.starts_with("Still on disk:")),
             other => panic!("expected Left, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn incomplete_task_discovery_blocks_destructive_flows() {
+        assert!(cleanup_blocked_by_task_discovery(Flow::Uninstall, true));
+        assert!(cleanup_blocked_by_task_discovery(Flow::Purge, true));
+        assert!(!cleanup_blocked_by_task_discovery(Flow::FilesOnly, true));
+        assert!(!cleanup_blocked_by_task_discovery(Flow::Purge, false));
     }
 
     #[test]
