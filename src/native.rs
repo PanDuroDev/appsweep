@@ -3164,8 +3164,13 @@ pub fn end_restore_point(sequence_number: i64) -> i32 {
 }
 
 pub fn delete_scheduled_task(name: &str) -> i32 {
+    let program_path = match system_program_path("schtasks.exe") {
+        Ok(path) => path,
+        Err(error) => return error,
+    };
     let command = format!(
-        "schtasks.exe /Delete /TN {} /F",
+        "{} /Delete /TN {} /F",
+        quote_windows_argument(&program_path),
         quote_windows_argument(name)
     );
     let (launch_or_wait_error, exit_code) = run_cmd(&command, true);
@@ -3176,19 +3181,26 @@ pub fn delete_scheduled_task(name: &str) -> i32 {
     }
 }
 
-fn capture_command_oem(program: &str, arguments: &[&str]) -> Option<String> {
-    // Resolve the administrative utility from System32 explicitly; CreateProcessW's
-    // NULL application-name search order checks the application/current directories first.
+fn system_program_path(program: &str) -> Result<String, i32> {
     let mut system_dir = vec![0u16; 32_768];
     let system_dir_len = unsafe {
         GetSystemDirectoryW(system_dir.as_mut_ptr(), system_dir.len() as u32)
     } as usize;
-    if system_dir_len == 0 || system_dir_len >= system_dir.len() {
-        return None;
+    if system_dir_len == 0 {
+        return Err(unsafe { GetLastError() } as i32);
+    }
+    if system_dir_len >= system_dir.len() {
+        return Err(122); // ERROR_INSUFFICIENT_BUFFER
     }
     system_dir.truncate(system_dir_len);
     let system_dir = String::from_utf16_lossy(&system_dir);
-    let program_path = format!("{}\\{}", system_dir.trim_end_matches(['\\', '/']), program);
+    Ok(format!("{}\\{}", system_dir.trim_end_matches(['\\', '/']), program))
+}
+
+fn capture_command_oem(program: &str, arguments: &[&str]) -> Option<String> {
+    // Administrative utilities are resolved from System32, never from an
+    // application or current working directory that might be user-writable.
+    let program_path = system_program_path(program).ok()?;
 
     // Quote every token according to CreateProcessW rules and reuse the bounded
     // pipe reader. A launch failure, timeout, or non-zero exit is not an empty list.
