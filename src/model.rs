@@ -9,7 +9,12 @@ pub fn is_protected_dir(dir: &std::path::Path) -> bool {
             .to_lowercase()
     };
     let target = norm(&dir.to_string_lossy());
-    if target.is_empty() {
+    if target.is_empty()
+        || target.starts_with(r"\\?\")
+        || target.starts_with(r"\\.\")
+    {
+        // Extended/device namespaces are intentionally unsupported for app
+        // cleanup: checking only their textual prefix can bypass guarded roots.
         return true;
     }
     // A drive root such as "c:" or "c:\".
@@ -327,6 +332,18 @@ mod tests {
         assert_eq!(human_size(1024), "1.00 KB");
         assert_eq!(human_size(100 * 1024 * 1024), "100 MB");
         assert_eq!(human_size(3 * 1024 * 1024 * 1024), "3.00 GB");
+    }
+
+    #[test]
+    fn extended_and_device_namespace_paths_are_protected() {
+        assert!(is_protected_dir(std::path::Path::new(r"\\?\C:\Windows")));
+        assert!(is_protected_dir(std::path::Path::new(r"\\.\C:\Windows")));
+        assert!(is_protected_dir(std::path::Path::new(
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1"
+        )));
+        assert!(is_protected_dir(std::path::Path::new(
+            r"\\?\UNC\server\share\Windows"
+        )));
     }
 
     #[test]
