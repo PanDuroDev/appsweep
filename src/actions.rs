@@ -967,13 +967,14 @@ fn run_elevated_plan(plan: &PurgePlan) -> Result<PurgeResult, String> {
         shortcuts: plan.shortcuts.clone(),
     };
     let text = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?;
-    plan_file
+    if let Err(error) = plan_file
         .write_all(text.as_bytes())
         .and_then(|()| plan_file.flush())
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&plan_path);
-            format!("Could not write the elevated plan: {}", e)
-        })?;
+    {
+        drop(plan_file);
+        let _ = std::fs::remove_file(&plan_path);
+        return Err(format!("Could not write the elevated plan: {}", error));
+    }
 
     let exe = exe_path();
     let params = format!("--plan \"{}\"", plan_path.to_string_lossy());
@@ -989,17 +990,23 @@ fn run_elevated_plan(plan: &PurgePlan) -> Result<PurgeResult, String> {
         return Err(format!("Elevated cleanup process failed (exit code {})", exit_code));
     }
 
-    let text = std::fs::read_to_string(&result_path).map_err(|e| {
-        drop(plan_file);
-        let _ = std::fs::remove_file(&plan_path);
-        format!("Could not read elevated cleanup results: {}", e)
-    })?;
-    let res: PurgeResult = serde_json::from_str(&text).map_err(|e| {
-        drop(plan_file);
-        let _ = std::fs::remove_file(&plan_path);
-        let _ = std::fs::remove_file(&result_path);
-        format!("Could not parse elevated cleanup results: {}", e)
-    })?;
+    let text = match std::fs::read_to_string(&result_path) {
+        Ok(text) => text,
+        Err(error) => {
+            drop(plan_file);
+            let _ = std::fs::remove_file(&plan_path);
+            return Err(format!("Could not read elevated cleanup results: {}", error));
+        }
+    };
+    let res: PurgeResult = match serde_json::from_str(&text) {
+        Ok(result) => result,
+        Err(error) => {
+            drop(plan_file);
+            let _ = std::fs::remove_file(&plan_path);
+            let _ = std::fs::remove_file(&result_path);
+            return Err(format!("Could not parse elevated cleanup results: {}", error));
+        }
+    };
     drop(plan_file);
     let _ = std::fs::remove_file(&plan_path);
     let _ = std::fs::remove_file(&result_path);
