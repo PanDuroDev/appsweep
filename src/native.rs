@@ -874,7 +874,7 @@ fn icon_to_bgra(icon: Handle, width: i32, height: i32) -> Option<Vec<u8>> {
 }
 
 pub fn extract_icon(path: &str, size: u32) -> Option<RawIcon> {
-    let requested = size.clamp(1, 512) as i32;
+    let requested = if size == 0 { 64 } else { size.clamp(1, 512) as i32 };
     let wide_path = wide(path);
     let mut icon = null_mut();
 
