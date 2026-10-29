@@ -69,6 +69,8 @@ const ILD_TRANSPARENT: u32 = 0x0001;
 const SHGFI_USEFILEATTRIBUTES: u32 = 0x0000_0010;
 const SHGFI_LARGEICON: u32 = 0x0000_0000;
 const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
+const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 const FILE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
 const BI_RGB: u32 = 0;
 const DIB_RGB_COLORS: u32 = 0;
@@ -1723,6 +1725,15 @@ fn clear_readonly(path: &Path) {
     }
 }
 
+/// Fail closed if Win32 cannot determine whether the path is a reparse point.
+fn is_reparse_point(path: &Path) -> bool {
+    let path_wide = wide(&long_path(&path.to_string_lossy()));
+    unsafe {
+        let attributes = GetFileAttributesW(path_wide.as_ptr());
+        attributes == u32::MAX || attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+}
+
 fn enable_privilege(name: &str) -> bool {
     let process = unsafe { GetCurrentProcess() };
     let mut token = null_mut();
@@ -1963,7 +1974,13 @@ fn restore_acl_snapshot(path: &Path, snapshot: &SavedSecurity) {
 
 
 fn remove_object(path: &Path) -> std::io::Result<()> {
-    std::fs::remove_dir(path).or_else(|_| std::fs::remove_file(path))
+    let path_wide = wide(&long_path(&path.to_string_lossy()));
+    let attributes = unsafe { GetFileAttributesW(path_wide.as_ptr()) };
+    if attributes != u32::MAX && attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        std::fs::remove_dir(path)
+    } else {
+        std::fs::remove_file(path).or_else(|_| std::fs::remove_dir(path))
+    }
 }
 
 fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
@@ -1982,7 +1999,7 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
         }
     };
 
-    if metadata.file_type().is_symlink() {
+    if metadata.file_type().is_symlink() || is_reparse_point(path) {
         clear_readonly(path);
         if remove_object(path).is_ok() {
             stats.deleted += 1;
@@ -2390,7 +2407,7 @@ pub fn path_size(path: &str) -> u64 {
         let Ok(metadata) = std::fs::symlink_metadata(path) else {
             return 0;
         };
-        if metadata.file_type().is_symlink() {
+        if metadata.file_type().is_symlink() || is_reparse_point(path) {
             return 0;
         }
         if metadata.is_file() {
