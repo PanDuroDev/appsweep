@@ -1345,8 +1345,79 @@ unsafe fn finish_process(process: Handle, wait: bool, code: &mut u32) -> i32 {
     0
 }
 
+fn windows_path_key(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase()
+}
+
+fn resolve_program_path(program: &str) -> Result<String, i32> {
+    let program = program.trim().trim_matches('"');
+    if program.is_empty() {
+        return Err(ERROR_INVALID_PARAMETER);
+    }
+    let supplied = Path::new(program);
+    if supplied.is_absolute() {
+        return Ok(program.to_string());
+    }
+    if program.contains('\\') || program.contains('/') {
+        let current = std::env::current_dir().map_err(|e| e.raw_os_error().unwrap_or(2))?;
+        return Ok(current.join(supplied).to_string_lossy().into_owned());
+    }
+
+    let mut candidates = vec![program.to_string()];
+    if supplied.extension().is_none() {
+        candidates.push(format!("{}.exe", program));
+    }
+
+    // Prefer Windows' System32 copy before PATH, and never allow CreateProcessW
+    // to search the AppSweep directory or the caller's current working directory.
+    for name in &candidates {
+        if let Ok(path) = system_program_path(name) {
+            if Path::new(&path).is_file() {
+                return Ok(path);
+            }
+        }
+    }
+
+    let current_dir = std::env::current_dir().ok();
+    let application_dir = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf));
+    let forbidden_dirs: Vec<String> = current_dir
+        .iter()
+        .chain(application_dir.iter())
+        .map(|path| windows_path_key(path))
+        .collect();
+
+    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+        if !dir.is_absolute() {
+            continue;
+        }
+        let resolved_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+        let dir_key = windows_path_key(&resolved_dir);
+        if forbidden_dirs.iter().any(|blocked| blocked == &dir_key) {
+            continue;
+        }
+        for name in &candidates {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Ok(candidate.to_string_lossy().into_owned());
+            }
+        }
+    }
+
+    Err(2) // ERROR_FILE_NOT_FOUND
+}
+
 pub fn run_cmd(command_line: &str, wait: bool) -> (i32, u32) {
-    let info = match start_process(None, command_line, None, true) {
+    let executable = command_executable(command_line);
+    let application = match resolve_program_path(&executable) {
+        Ok(path) => path,
+        Err(error) => return (error, 0),
+    };
+    let info = match start_process(Some(&application), command_line, None, true) {
         Ok(info) => info,
         Err(error) => return (error as i32, 0),
     };
@@ -1390,15 +1461,18 @@ fn quote_windows_argument(argument: &str) -> String {
 }
 
 pub fn run_shell(file: &str, params: &str, cwd: Option<&str>, wait: bool) -> (i32, u32) {
+    let application = match resolve_program_path(file) {
+        Ok(path) => path,
+        Err(error) => return (error, 0),
+    };
     let command_line = if params.is_empty() {
         quote_windows_argument(file)
     } else {
         format!("{} {}", quote_windows_argument(file), params)
     };
-    // lpApplicationName must be NULL to retain CreateProcessW's documented
-    // executable search/default-extension behavior for bare names such as regedit.exe.
-    // The executable token is already quoted by quote_windows_argument above.
-    let info = match start_process(None, &command_line, cwd, false) {
+    // Pass an explicit, resolved application path so CreateProcessW cannot
+    // choose an executable from the AppSweep or current working directory.
+    let info = match start_process(Some(&application), &command_line, cwd, false) {
         Ok(info) => info,
         Err(error) => return (error as i32, 0),
     };
@@ -1506,6 +1580,18 @@ fn capture_process_output(command_line: &str) -> Option<(Vec<u8>, u32)> {
         }
     }
 
+    let executable = command_executable(command_line);
+    let application = match resolve_program_path(&executable) {
+        Ok(path) => path,
+        Err(_) => {
+            unsafe {
+                let _ = CloseHandle(read_pipe);
+                let _ = CloseHandle(write_pipe);
+            }
+            return None;
+        }
+    };
+    let application_wide = wide(&application);
     let mut command_wide = wide(command_line);
     let mut startup: StartupInfoW = unsafe { zeroed() };
     startup.cb = size_of::<StartupInfoW>() as u32;
@@ -1518,7 +1604,7 @@ fn capture_process_output(command_line: &str) -> Option<(Vec<u8>, u32)> {
     let mut info: ProcessInformation = unsafe { zeroed() };
     let created = unsafe {
         CreateProcessW(
-            null(),
+            application_wide.as_ptr(),
             command_wide.as_mut_ptr(),
             null(),
             null(),
