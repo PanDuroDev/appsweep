@@ -75,6 +75,8 @@ const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 const FILE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
 const FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
+const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
+const FILE_BASIC_INFO_CLASS: i32 = 0;
 const FILE_SHARE_READ: u32 = 0x0000_0001;
 const FILE_SHARE_WRITE: u32 = 0x0000_0002;
 const OPEN_EXISTING: u32 = 3;
@@ -257,6 +259,15 @@ struct ProcessInformation {
 struct FileAttributeTagInfo {
     file_attributes: u32,
     reparse_tag: u32,
+}
+
+#[repr(C)]
+struct FileBasicInfo {
+    creation_time: i64,
+    last_access_time: i64,
+    last_write_time: i64,
+    change_time: i64,
+    file_attributes: u32,
 }
 
 struct DirectoryHandle(Vec<Handle>);
@@ -530,6 +541,12 @@ extern "system" {
         file: Handle,
         information_class: i32,
         file_information: *mut c_void,
+        buffer_size: u32,
+    ) -> Bool;
+    fn SetFileInformationByHandle(
+        file: Handle,
+        information_class: i32,
+        file_information: *const c_void,
         buffer_size: u32,
     ) -> Bool;
     fn TerminateProcess(process: Handle, exit_code: u32) -> Bool;
@@ -2173,10 +2190,45 @@ struct DeleteStats {
 fn clear_readonly(path: &Path) {
     let path_wide = wide(&long_path(&path.to_string_lossy()));
     unsafe {
-        let attributes = GetFileAttributesW(path_wide.as_ptr());
-        if attributes != u32::MAX && attributes & FILE_ATTRIBUTE_READONLY != 0 {
-            let _ = SetFileAttributesW(path_wide.as_ptr(), attributes & !FILE_ATTRIBUTE_READONLY);
+        // Open the object itself without following a reparse point, and do not
+        // share delete access while changing its attributes. This avoids
+        // clearing the readonly bit on a junction target after a path swap.
+        let handle = CreateFileW(
+            path_wide.as_ptr(),
+            FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            null_mut(),
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+            null_mut(),
+        );
+        if handle.is_null() || handle == -1isize as Handle {
+            return;
         }
+
+        let mut info: FileBasicInfo = zeroed();
+        let queried = GetFileInformationByHandleEx(
+            handle,
+            FILE_BASIC_INFO_CLASS,
+            &mut info as *mut FileBasicInfo as *mut c_void,
+            size_of::<FileBasicInfo>() as u32,
+        ) != 0;
+        if queried
+            && info.file_attributes & FILE_ATTRIBUTE_REPARSE_POINT == 0
+            && info.file_attributes & FILE_ATTRIBUTE_READONLY != 0
+        {
+            info.file_attributes &= !FILE_ATTRIBUTE_READONLY;
+            if info.file_attributes == 0 {
+                info.file_attributes = FILE_ATTRIBUTE_NORMAL;
+            }
+            let _ = SetFileInformationByHandle(
+                handle,
+                FILE_BASIC_INFO_CLASS,
+                &info as *const FileBasicInfo as *const c_void,
+                size_of::<FileBasicInfo>() as u32,
+            );
+        }
+        let _ = CloseHandle(handle);
     }
 }
 
@@ -2668,16 +2720,18 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
                 }
             }
         }
-        drop(directory_guard.take());
-
         if enumeration_failed {
+            drop(directory_guard.take());
             if let Some(snapshot) = early_snapshot.as_ref() {
                 let _ = restore_acl_snapshot(path, snapshot);
             }
             return;
         }
 
+        // Keep the directory-chain handles alive while changing attributes;
+        // this prevents a checked directory from being swapped for a junction.
         clear_readonly(path);
+        drop(directory_guard.take());
         match std::fs::remove_dir(path) {
             Ok(()) => stats.deleted += 1,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
