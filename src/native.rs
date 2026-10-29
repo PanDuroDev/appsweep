@@ -74,6 +74,7 @@ const ILD_TRANSPARENT: u32 = 0x0001;
 const SHGFI_USEFILEATTRIBUTES: u32 = 0x0000_0010;
 const SHGFI_LARGEICON: u32 = 0x0000_0000;
 const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
+const FILE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
 const BI_RGB: u32 = 0;
 const DIB_RGB_COLORS: u32 = 0;
 const DI_NORMAL: u32 = 0x0003;
@@ -466,6 +467,8 @@ extern "system" {
         output_len: i32,
     ) -> i32;
     fn MoveFileExW(existing_name: *const u16, new_name: *const u16, flags: u32) -> Bool;
+    fn GetFileAttributesW(file_name: *const u16) -> u32;
+    fn SetFileAttributesW(file_name: *const u16, attributes: u32) -> Bool;
     fn CreateToolhelp32Snapshot(flags: u32, process_id: u32) -> Handle;
     fn Process32FirstW(snapshot: Handle, entry: *mut ProcessEntry32W) -> Bool;
     fn Process32NextW(snapshot: Handle, entry: *mut ProcessEntry32W) -> Bool;
@@ -1713,11 +1716,14 @@ struct DeleteStats {
 }
 
 fn clear_readonly(path: &Path) {
-    if let Ok(metadata) = std::fs::symlink_metadata(path) {
-        let mut permissions = metadata.permissions();
-        if permissions.readonly() {
-            permissions.set_readonly(false);
-            let _ = std::fs::set_permissions(path, permissions);
+    let path_wide = wide(&long_path(&path.to_string_lossy()));
+    unsafe {
+        let attributes = GetFileAttributesW(path_wide.as_ptr());
+        if attributes != u32::MAX && attributes & FILE_ATTRIBUTE_READONLY != 0 {
+            let _ = SetFileAttributesW(
+                path_wide.as_ptr(),
+                attributes & !FILE_ATTRIBUTE_READONLY,
+            );
         }
     }
 }
@@ -1984,6 +1990,7 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
     };
 
     if metadata.file_type().is_symlink() {
+        clear_readonly(path);
         if remove_object(path).is_ok() {
             stats.deleted += 1;
         } else if stats.first_error.is_empty() {
