@@ -1822,6 +1822,10 @@ impl Runner {
 
 pub fn spawn(app: AppEntry, flow: Flow, settings: Settings, keep_data: bool) -> Job {
     let steps = build_plan(&app, flow, &settings, keep_data);
+    spawn_with_steps(app, settings, steps)
+}
+
+fn spawn_with_steps(app: AppEntry, settings: Settings, steps: Vec<Step>) -> Job {
     let (tx, rx) = channel();
     let app_id = app.id;
     let app_name = app.name.clone();
@@ -2115,7 +2119,15 @@ pub fn selftest() -> i32 {
     }
 
     println!("selftest root: {}", root.display());
-    let mut job = spawn(app, Flow::Purge, settings, false);
+    let steps = build_plan_with_discovery(
+        &app,
+        Flow::Purge,
+        &settings,
+        false,
+        |_| Some(Vec::new()),
+        |_| Some(Vec::new()),
+    );
+    let mut job = spawn_with_steps(app, settings, steps);
     let mut last = usize::MAX;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
@@ -2340,6 +2352,7 @@ pub fn selftest() -> i32 {
     if dir_gone
         && reg_gone
         && failures == 0
+        && verify_failures == 0
         && bk_failures == 0
         && path_failures == 0
         && acl_failures == 0

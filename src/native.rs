@@ -3168,9 +3168,11 @@ pub fn package_registered(full_name: &str) -> Option<bool> {
 }
 
 fn read_task_names() -> Option<Vec<String>> {
-    // Locale-independent output lets us distinguish a complete empty match from
-    // an inaccessible, malformed, or truncated inventory.
-    let listing = capture_command_oem("schtasks.exe", &["/Query", "/FO", "CSV", "/V", "/NH"])?;
+    // Verification needs only task names. Avoid /V here: the action column
+    // makes the output much larger and can hit the bounded process-capture
+    // limit on systems with many scheduled tasks. tasks_under still uses /V
+    // because it must match each task's executable path.
+    let listing = capture_command_oem("schtasks.exe", &["/Query", "/FO", "CSV", "/NH"])?;
     parse_task_names(&listing)
 }
 
@@ -3706,9 +3708,9 @@ fn parse_task_names(listing: &str) -> Option<Vec<String>> {
     let rows = parse_csv_rows(listing)?;
     let mut names = Vec::with_capacity(rows.len());
     for row in rows {
-        // /V emits TaskName plus the command-bearing columns used by the
-        // ownership parser. A short record is incomplete, not proof of absence.
-        if row.len() < 9 || row[1].trim().is_empty() {
+        // Verification needs only TaskName. Require the host and task-name
+        // columns, but do not make this depend on the verbose action columns.
+        if row.len() < 2 || row[1].trim().is_empty() {
             return None;
         }
         names.push(row[1].trim().to_string());
@@ -3775,21 +3777,19 @@ mod tests {
     #[test]
     fn task_name_inventory_is_exact_and_rejects_incomplete_rows() {
         let listing = [
-            r#""localhost","\Demo\One","N/A","Ready","Interactive","N/A","0","User","C:\Demo\one.exe""#,
-            r#""localhost","\Demo\Two, with comma","N/A","Ready","Interactive","N/A","0","User","C:\Demo\two.exe""#,
+            r#""localhost","\\Demo\\One","N/A","Ready""#,
+            r#""localhost","\\Demo\\Two, with comma","N/A","Ready""#,
         ]
-        .join("\r\n");
+        .join("\\r\\n");
         let names = parse_task_names(&listing).unwrap();
         assert!(names
             .iter()
-            .any(|name| name.eq_ignore_ascii_case(r"\Demo\One")));
-        assert!(names.iter().any(|name| name == r"\Demo\Two, with comma"));
+            .any(|name| name.eq_ignore_ascii_case(r"\\Demo\\One")));
+        assert!(names.iter().any(|name| name == r"\\Demo\\Two, with comma"));
         assert_eq!(parse_task_names(""), None);
         assert_eq!(parse_task_names(r#""host","incomplete""#), None);
-        assert_eq!(parse_task_names(r#""host","task","only","four""#), None);
         assert_eq!(parse_task_names(r#""host""#), None);
     }
-
     #[test]
     fn task_discovery_rejects_blank_paths_and_uses_path_aware_csv_fields() {
         assert_eq!(tasks_under("   "), None);
