@@ -2301,7 +2301,8 @@ pub fn grant_everyone_full_control(path: &str) -> i32 {
 }
 
 pub fn path_exists(path: &str) -> bool {
-    std::fs::symlink_metadata(long_path(path)).is_ok()
+    let path_wide = wide(&long_path(path));
+    unsafe { GetFileAttributesW(path_wide.as_ptr()) != u32::MAX }
 }
 
 pub fn delete_on_reboot(path: &str) -> i32 {
