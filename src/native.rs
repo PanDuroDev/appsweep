@@ -2068,7 +2068,7 @@ pub struct DeleteReport {
 
 fn is_root_path(path: &str) -> bool {
     let normalized = path.replace('/', "\\");
-    let trimmed = normalized.trim_end_matches(|ch| ch == '\\' || '/');
+    let trimmed = normalized.trim_end_matches(|ch| ch == '\\' || ch == '/');
     if trimmed.is_empty() {
         return true;
     }
