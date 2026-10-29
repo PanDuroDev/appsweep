@@ -3891,29 +3891,31 @@ mod tests {
     #[test]
     fn task_listing_matches_the_command_and_keeps_every_result() {
         let folder = r"C:\Apps\Demo";
-        // TaskName, Author and Comment mention the folder; only the command can
-        // make a task the app's.
+        // Author metadata can mention the app folder without making the task
+        // part of the app. Only the Task To Run column controls ownership.
         let listing = [
-            r"TaskName: \Decoy",
-            r"Author: C:\Apps\Demo\owner",
-            r"Comment: started by C:\Apps\Demo",
-            r"Task To Run: C:\Other\app.exe",
-            "",
-            r"TaskName: \Real",
-            r"Task To Run: C:\Apps\Demo\app.exe /run",
-            "",
+            r#""localhost","\Decoy","N/A","Ready","Interactive","N/A","0","C:\Apps\Demo\owner","C:\Other\app.exe""#,
+            r#""localhost","\Real","N/A","Ready","Interactive","N/A","0","User","C:\Apps\Demo\app.exe /run""#,
         ]
         .join("\r\n");
-        assert_eq!(parse_tasks(&listing, folder), vec![r"\Real"]);
+        assert_eq!(
+            parse_tasks(&listing, folder),
+            Some(vec![r"\Real".to_string()])
+        );
 
         // More than 64 matches used to be dropped silently.
         let mut many = Vec::new();
         for index in 0..70 {
-            many.push(format!(r"TaskName: \T{index}"));
-            many.push(r"Task To Run: C:\Apps\Demo\app.exe".to_string());
-            many.push(String::new());
+            many.push(format!(
+                r#""localhost","\T{index}","N/A","Ready","Interactive","N/A","0","User","C:\Apps\Demo\app.exe""#
+            ));
         }
-        assert_eq!(parse_tasks(&many.join("\r\n"), folder).len(), 70);
+        assert_eq!(
+            parse_tasks(&many.join("\r\n"), folder)
+                .expect("the complete CSV inventory should parse")
+                .len(),
+            70
+        );
     }
 
     #[test]
