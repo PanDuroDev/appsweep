@@ -14,6 +14,7 @@ type HResult = i32;
 
 const ERROR_INVALID_PARAMETER: i32 = 87;
 const ERROR_GEN_FAILURE: i32 = 31;
+const ERROR_INSUFFICIENT_BUFFER: i32 = 122;
 const WAIT_TIMEOUT: u32 = 0x102;
 const INFINITE: u32 = 0xffff_ffff;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -2416,7 +2417,8 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
     };
 
     if metadata.file_type().is_symlink() || is_reparse_point(path) {
-        clear_readonly(path);
+        // Never mutate attributes through a junction/symlink: remove the
+        // reparse point itself, and fail closed if Windows refuses it.
         if remove_object(path).is_ok() {
             stats.deleted += 1;
         } else {
@@ -3217,7 +3219,7 @@ fn system_program_path(program: &str) -> Result<String, i32> {
         return Err(unsafe { GetLastError() } as i32);
     }
     if system_dir_len >= system_dir.len() {
-        return Err(122); // ERROR_INSUFFICIENT_BUFFER
+        return Err(ERROR_INSUFFICIENT_BUFFER);
     }
     system_dir.truncate(system_dir_len);
     let system_dir = String::from_utf16_lossy(&system_dir);
@@ -3389,6 +3391,14 @@ pub fn ensure_dir(path: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsupported_namespace_paths_fail_closed_for_destructive_operations() {
+        assert!(is_protected_or_unsupported_path(r"\\?\C:\Windows"));
+        assert!(is_protected_or_unsupported_path(r"\\.\C:\Windows"));
+        assert!(is_protected_or_unsupported_path(""));
+        assert!(is_protected_or_unsupported_path(r"\\?\GLOBALROOT\Device\HarddiskVolume1"));
+    }
 
     #[test]
     fn restore_point_structs_match_the_windows_pack_one_layout() {
