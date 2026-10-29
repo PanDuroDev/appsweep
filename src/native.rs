@@ -2037,13 +2037,23 @@ fn is_root_path(path: &str) -> bool {
     }
 
     if let Some(extended) = trimmed.strip_prefix(r"\\?\") {
-        if let Some(unc) = extended.strip_prefix("UNC\\") {
-            return unc.split('\\').filter(|part| !part.is_empty()).count() <= 2;
+        if extended
+            .get(..4)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("UNC\\"))
+        {
+            return extended[4..]
+                .split('\\')
+                .filter(|part| !part.is_empty())
+                .count()
+                <= 2;
         }
         if is_root_path(extended) {
             return true;
         }
-        return extended.starts_with("Volume{") && !extended.contains('\\');
+        return extended
+            .get(..7)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Volume{"))
+            && !extended.contains('\\');
     }
 
     let bytes = trimmed.as_bytes();
@@ -2425,6 +2435,7 @@ mod tests {
         assert!(is_root_path(r"\\server\share"));
         assert!(is_root_path(r"\\?\C:\"));
         assert!(is_root_path(r"\\?\UNC\server\share"));
+        assert!(is_root_path(r"\\?\unc\server\share"));
         assert!(is_root_path(r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\"));
         assert!(!is_root_path(r"C:\Apps\Demo"));
         assert!(!is_root_path(r"\\server\share\Demo"));
