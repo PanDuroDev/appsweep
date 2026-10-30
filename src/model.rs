@@ -177,6 +177,31 @@ impl RegRoot {
             RegRoot::Hkcu => "HKCU",
         }
     }
+
+    /// Short hive name used by `reg.exe` commands.
+    pub fn hive(&self) -> &'static str {
+        match self {
+            RegRoot::Hkcu => "HKCU",
+            _ => "HKLM",
+        }
+    }
+
+    /// Long hive name used inside a `.reg` export.
+    pub fn hive_long(&self) -> &'static str {
+        match self {
+            RegRoot::Hkcu => "HKEY_CURRENT_USER",
+            _ => "HKEY_LOCAL_MACHINE",
+        }
+    }
+
+    /// `reg.exe` switch that selects the registry view this root was read from.
+    /// Without it a 32-bit uninstall key is exported from the 64-bit view.
+    pub fn view_flag(&self) -> &'static str {
+        match self {
+            RegRoot::Hklm32 => "/reg:32",
+            _ => "/reg:64",
+        }
+    }
 }
 
 impl AppEntry {
