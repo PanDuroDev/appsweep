@@ -13,8 +13,19 @@ mod userdata;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if let Some(pos) = args.iter().position(|a| a == "--plan") {
-        if let Some(path) = args.get(pos + 1) {
-            std::process::exit(actions::run_plan_file(path));
+        let path = args.get(pos + 1);
+        let sid = args
+            .iter()
+            .position(|arg| arg == "--plan-user-sid")
+            .and_then(|sid_pos| args.get(sid_pos + 1));
+        match (path, sid) {
+            (Some(path), Some(sid)) => {
+                std::process::exit(actions::run_plan_file(path, sid));
+            }
+            _ => {
+                eprintln!("Rejected elevated plan: missing path or caller SID");
+                std::process::exit(4);
+            }
         }
     }
     if args.iter().any(|a| a == "--version") {
@@ -34,9 +45,17 @@ fn main() {
             .unwrap_or_else(|| "C:\\Program Files\\Git".to_string());
         let found = native::tasks_under(&path);
         println!("path: {}", path);
-        println!("count: {}", found.len());
-        for t in &found {
-            println!("  {}", t);
+        match &found {
+            Some(tasks) => {
+                println!("count: {}", tasks.len());
+                for t in tasks {
+                    println!("  {}", t);
+                }
+            }
+            None => {
+                eprintln!("count: unknown (schtasks could not be read)");
+                std::process::exit(1);
+            }
         }
         return;
     }
@@ -63,6 +82,18 @@ fn main() {
         return;
     }
 
+    // Initialize process-wide COM security before eframe or any UI component
+    // initializes COM. System Restore needs callbacks from Windows services.
+    let settings = settings::Settings::load();
+    // Settings can be changed while the UI is open, so initialize this before
+    // eframe initializes COM even when restore points are currently disabled.
+    let restore_com_security_ready = native::initialize_restore_point_com_security();
+    if settings.create_restore_point && !restore_com_security_ready {
+        eprintln!(
+            "System Restore COM security initialization failed; restore-point creation will be reported as unavailable."
+        );
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 820.0])
@@ -76,11 +107,15 @@ fn main() {
     let _ = eframe::run_native(
         "AppSweep",
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             theme::load_fonts(&cc.egui_ctx);
-            let s = settings::Settings::load();
-            theme::apply(&cc.egui_ctx, s.theme, s.accent, s.density);
-            Ok(Box::new(ui::AppSweep::new(cc, s)))
+            theme::apply(
+                &cc.egui_ctx,
+                settings.theme,
+                settings.accent,
+                settings.density,
+            );
+            Ok(Box::new(ui::AppSweep::new(cc, settings)))
         }),
     );
 }

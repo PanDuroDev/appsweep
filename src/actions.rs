@@ -1,6 +1,9 @@
 use crate::model::{AppEntry, RegRoot, Source};
 use crate::settings::Settings;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
@@ -48,6 +51,10 @@ pub struct Step {
 #[derive(Clone, Debug)]
 pub enum Op {
     Nothing,
+    /// A warning that carries no action, for work the plan could not inspect.
+    Note {
+        message: String,
+    },
     KillProcesses {
         path: String,
     },
@@ -96,6 +103,9 @@ pub enum Op {
         reg: Vec<(RegRoot, String)>,
         services: Vec<String>,
         tasks: Vec<String>,
+        /// True when scheduled-task discovery failed, so verification cannot
+        /// report "Removed completely" based on an unchecked task list.
+        tasks_unknown: bool,
         shortcuts: Vec<String>,
         package: Option<String>,
     },
@@ -383,6 +393,18 @@ fn reg_key_exists(root: RegRoot, path: &str) -> bool {
     reg_key_state(root, path).unwrap_or(true)
 }
 
+/// The elevated plan file stores roots as `RegRoot::label()` text. Unknown
+/// labels must be rejected: defaulting them to HKCU could delete an unrelated
+/// user key with the same subkey name.
+fn reg_root_from_label(label: &str) -> Option<RegRoot> {
+    match label {
+        l if l == RegRoot::Hklm.label() => Some(RegRoot::Hklm),
+        l if l == RegRoot::Hklm32.label() => Some(RegRoot::Hklm32),
+        l if l == RegRoot::Hkcu.label() => Some(RegRoot::Hkcu),
+        _ => None,
+    }
+}
+
 pub fn delete_reg_key(root: RegRoot, path: &str) -> Result<(), String> {
     use winreg::enums::*;
     use winreg::RegKey;
@@ -466,7 +488,33 @@ fn safe_paths(paths: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+fn cleanup_blocked_by_resource_discovery(flow: Flow, inventory_unknown: bool) -> bool {
+    inventory_unknown && matches!(flow, Flow::Uninstall | Flow::Purge)
+}
+
 pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bool) -> Vec<Step> {
+    build_plan_with_discovery(
+        app,
+        flow,
+        settings,
+        keep_data,
+        crate::native::services_under,
+        crate::native::tasks_under,
+    )
+}
+
+fn build_plan_with_discovery<S, T>(
+    app: &AppEntry,
+    flow: Flow,
+    settings: &Settings,
+    keep_data: bool,
+    discover_services: S,
+    discover_tasks: T,
+) -> Vec<Step>
+where
+    S: FnOnce(&str) -> Option<Vec<String>>,
+    T: FnOnce(&str) -> Option<Vec<String>>,
+{
     let mut steps: Vec<Step> = Vec::new();
     let mut add = |title: &str, detail: &str, op: Op, skip_if_gone: bool, optional: bool| {
         steps.push(Step {
@@ -479,12 +527,26 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
         });
     };
 
-    // A protected folder must not reach any op at all, not just the delete
-    // ones: killing the processes of "C:\Windows" would take the session down.
-    let dir = app
+    // A protected folder must not reach any operation: process killing, trace
+    // cleanup, or registry/package removal can be unsafe with a bad install path.
+    if app
         .install_dir
-        .clone()
-        .filter(|d| !crate::model::is_protected_dir(d));
+        .as_ref()
+        .is_some_and(|dir| crate::model::is_protected_dir(dir))
+    {
+        return vec![Step {
+            title: "Cleanup blocked".into(),
+            detail: "The recorded installation folder is protected. No changes were made.".into(),
+            status: StepStatus::Pending,
+            op: Op::Note {
+                message: "Cleanup blocked because the recorded installation folder is protected"
+                    .into(),
+            },
+            skip_if_gone: false,
+            optional: false,
+        }];
+    }
+    let dir = app.install_dir.clone();
     // "Keep user data" means: only touch the program folder, never the
     // AppData / ProgramData leftovers that hold the user's own files.
     let traces = if keep_data {
@@ -534,15 +596,75 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
     // Services, scheduled tasks and shortcuts that live in the app folder are
     // part of what Uninstall and Purge both have to remove - and what Verify
     // has to check afterwards, so they are discovered once, up front.
-    let svc_names: Vec<String> = match &dir {
-        Some(d) => crate::native::services_under(&s(d)),
-        None => Vec::new(),
+    let mut services_unknown = false;
+    let svc_names: Vec<String> = if flow == Flow::FilesOnly {
+        Vec::new()
+    } else {
+        match &dir {
+            Some(d) => match discover_services(&s(d)) {
+                Some(found) => found,
+                None => {
+                    services_unknown = true;
+                    add(
+                        "List installed services",
+                        "The service list could not be read - services may remain",
+                        Op::Note {
+                            message: "Services could not be listed".into(),
+                        },
+                        false,
+                        true,
+                    );
+                    Vec::new()
+                }
+            },
+            None => Vec::new(),
+        }
     };
-    let tasks: Vec<String> = match &dir {
-        Some(d) => crate::native::tasks_under(&s(d)),
-        None => Vec::new(),
+    let mut tasks_unknown = false;
+    let tasks: Vec<String> = if flow == Flow::FilesOnly {
+        // This flow intentionally leaves services and scheduled tasks alone.
+        Vec::new()
+    } else {
+        match &dir {
+            Some(d) => match discover_tasks(&s(d)) {
+                Some(found) => found,
+                None => {
+                    tasks_unknown = true;
+                    // The list could not be read: cleanup may leave startup tasks
+                    // behind, and "no tasks" would be a claim nobody checked.
+                    add(
+                        "List scheduled tasks",
+                        "The task list could not be read - startup tasks may remain",
+                        Op::Note {
+                            message: "Scheduled tasks could not be listed".into(),
+                        },
+                        false,
+                        true,
+                    );
+                    Vec::new()
+                }
+            },
+            None => Vec::new(),
+        }
     };
     let shortcuts: Vec<String> = app.shortcuts.iter().map(|p| s(p)).collect();
+
+    // A purge/uninstall that cannot enumerate scheduled tasks could leave a
+    // startup task pointing at the folder we are about to remove. Do not run
+    // any partial cleanup unless task discovery was complete.
+    if cleanup_blocked_by_resource_discovery(flow, tasks_unknown || services_unknown) {
+        return vec![Step {
+            title: "Cleanup cancelled".into(),
+            detail: "Services or scheduled tasks could not be enumerated, so no changes were made."
+                .into(),
+            status: StepStatus::Pending,
+            op: Op::Note {
+                message: "Cleanup cancelled because service/task discovery failed".into(),
+            },
+            skip_if_gone: false,
+            optional: false,
+        }];
+    }
 
     match flow {
         Flow::Uninstall => {
@@ -789,9 +911,15 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
             },
             services: svc_names.clone(),
             tasks: tasks.clone(),
-            shortcuts: shortcuts.clone(),
-            package: match app.source {
-                Source::Uwp => app.package_full_name.clone(),
+            tasks_unknown,
+            shortcuts: if flow == Flow::FilesOnly {
+                Vec::new()
+            } else {
+                shortcuts.clone()
+            },
+            package: match (flow, app.source) {
+                (Flow::FilesOnly, _) => None,
+                (_, Source::Uwp) => app.package_full_name.clone(),
                 _ => None,
             },
         },
@@ -812,7 +940,6 @@ pub struct PurgePlan {
     pub services: Vec<String>,
     pub tasks: Vec<String>,
     pub shortcuts: Vec<String>,
-    pub result_path: String,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -822,47 +949,206 @@ pub struct PurgeResult {
     pub log: Vec<String>,
 }
 
+impl PurgeResult {
+    fn record_removed(&mut self, message: String) {
+        self.deleted = self.deleted.saturating_add(1);
+        self.log.push(message);
+    }
+}
+
+#[cfg(windows)]
+fn create_locked_plan_file(path: &Path) -> std::io::Result<std::fs::File> {
+    // Keep the writer open across the UAC handoff. Share-read allows the
+    // elevated child to read the JSON but blocks another process from replacing,
+    // modifying, or deleting the plan while the user responds to the prompt.
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .share_mode(0x0000_0001) // FILE_SHARE_READ only
+        .open(path)
+}
+
+#[cfg(not(windows))]
+fn create_locked_plan_file(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+fn result_path_for_plan(plan_path: &Path) -> Result<PathBuf, String> {
+    let file_name = plan_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Invalid elevated plan filename".to_string())?;
+    let stem = file_name
+        .strip_suffix(".json")
+        .filter(|stem| stem.starts_with("plan-"))
+        .ok_or_else(|| "Invalid elevated plan filename".to_string())?;
+    Ok(plan_path.with_file_name(format!("{}.result.json", stem)))
+}
+
 fn run_elevated_plan(plan: &PurgePlan) -> Result<PurgeResult, String> {
     let dir = crate::icons::app_data_dir().join("plans");
-    let _ = std::fs::create_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir_metadata = std::fs::symlink_metadata(&dir).map_err(|e| e.to_string())?;
+    if !dir_metadata.is_dir()
+        || dir_metadata.file_type().is_symlink()
+        || crate::native::is_reparse_point(&dir)
+    {
+        return Err("The elevated plan directory must be a normal directory".into());
+    }
+    let canonical_dir = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let plan_path = dir.join(format!("plan-{}.json", stamp));
-    let result_path = dir.join(format!("plan-{}.result.json", stamp));
+    let mut attempt = 0u32;
+    let (plan_path, mut plan_file) = loop {
+        let suffix = if attempt == 0 {
+            format!("{}-{}", std::process::id(), stamp)
+        } else {
+            format!("{}-{}-{}", std::process::id(), stamp, attempt)
+        };
+        let candidate = canonical_dir.join(format!("plan-{}.json", suffix));
+        match create_locked_plan_file(&candidate) {
+            Ok(file) => break (candidate, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                attempt = attempt.saturating_add(1);
+            }
+            Err(error) => return Err(format!("Could not create an elevated plan: {}", error)),
+        }
+    };
+    let result_path = result_path_for_plan(&plan_path)?;
 
-    let mut p = PurgePlan {
+    let p = PurgePlan {
         delete_paths: plan.delete_paths.clone(),
         delete_reg: plan.delete_reg.clone(),
         services: plan.services.clone(),
         tasks: plan.tasks.clone(),
         shortcuts: plan.shortcuts.clone(),
-        result_path: result_path.to_string_lossy().to_string(),
     };
-    p.result_path = result_path.to_string_lossy().to_string();
-
     let text = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?;
-    std::fs::write(&plan_path, text).map_err(|e| e.to_string())?;
+    if let Err(error) = plan_file
+        .write_all(text.as_bytes())
+        .and_then(|()| plan_file.flush())
+    {
+        drop(plan_file);
+        let _ = std::fs::remove_file(&plan_path);
+        return Err(format!("Could not write the elevated plan: {}", error));
+    }
 
     let exe = exe_path();
     let params = format!("--plan \"{}\"", plan_path.to_string_lossy());
-    let (rc, _) = crate::native::run_elevated(&exe.to_string_lossy(), &params, None, true);
-    if rc != 0 {
-        // 1223 = user cancelled the UAC prompt
-        return Err(format!("Could not elevate (code {})", rc));
+    let parent_user_sid = crate::native::current_user_sid();
+    if parent_user_sid.is_empty() {
+        drop(plan_file);
+        let _ = std::fs::remove_file(&plan_path);
+        return Err("Could not determine the current user SID for elevation".into());
+    }
+    let params = format!("{} --plan-user-sid \"{}\"", params, parent_user_sid);
+    let (rc, exit_code) = crate::native::run_elevated(&exe.to_string_lossy(), &params, None, true);
+    if rc != 0 || exit_code != 0 {
+        drop(plan_file);
+        let _ = std::fs::remove_file(&plan_path);
+        let _ = std::fs::remove_file(&result_path);
+        if rc != 0 {
+            return Err(format!("Could not elevate (code {})", rc));
+        }
+        if exit_code == 6 {
+            return Err(
+                "Elevation was requested under a different Windows account. Retry with the same account."
+                    .into(),
+            );
+        }
+        return Err(format!(
+            "Elevated cleanup process failed (exit code {})",
+            exit_code
+        ));
     }
 
-    let text = std::fs::read_to_string(&result_path).map_err(|e| e.to_string())?;
-    let res: PurgeResult = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let text = match std::fs::read_to_string(&result_path) {
+        Ok(text) => text,
+        Err(error) => {
+            drop(plan_file);
+            let _ = std::fs::remove_file(&plan_path);
+            return Err(format!(
+                "Could not read elevated cleanup results: {}",
+                error
+            ));
+        }
+    };
+    let res: PurgeResult = match serde_json::from_str(&text) {
+        Ok(result) => result,
+        Err(error) => {
+            drop(plan_file);
+            let _ = std::fs::remove_file(&plan_path);
+            let _ = std::fs::remove_file(&result_path);
+            return Err(format!(
+                "Could not parse elevated cleanup results: {}",
+                error
+            ));
+        }
+    };
+    drop(plan_file);
     let _ = std::fs::remove_file(&plan_path);
     let _ = std::fs::remove_file(&result_path);
     Ok(res)
 }
 
 /// Entry point used by the elevated child process.
-pub fn run_plan_file(path: &str) -> i32 {
-    let text = match std::fs::read_to_string(path) {
+fn validate_elevated_plan_path(path: &str) -> Result<(PathBuf, PathBuf), String> {
+    let plans_dir = crate::icons::app_data_dir().join("plans");
+    let directory_metadata = std::fs::symlink_metadata(&plans_dir)
+        .map_err(|e| format!("Could not inspect elevated plan directory: {}", e))?;
+    if !directory_metadata.is_dir()
+        || directory_metadata.file_type().is_symlink()
+        || crate::native::is_reparse_point(&plans_dir)
+    {
+        return Err("The elevated plan directory must be a normal directory".into());
+    }
+    let canonical_dir = std::fs::canonicalize(&plans_dir)
+        .map_err(|e| format!("Could not validate elevated plan directory: {}", e))?;
+    let supplied_path = Path::new(path);
+    let metadata = std::fs::symlink_metadata(supplied_path)
+        .map_err(|e| format!("Could not inspect elevated plan: {}", e))?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || crate::native::is_reparse_point(supplied_path)
+    {
+        return Err("Elevated plan must be a regular, non-reparse file".into());
+    }
+    let canonical_path = std::fs::canonicalize(supplied_path)
+        .map_err(|e| format!("Could not resolve elevated plan: {}", e))?;
+    if canonical_path.parent() != Some(canonical_dir.as_path()) {
+        return Err("Elevated plan is outside the AppSweep plans directory".into());
+    }
+    let result_path = result_path_for_plan(&canonical_path)?;
+    Ok((canonical_path, result_path))
+}
+
+fn caller_sid_matches(expected_user_sid: &str, actual_user_sid: &str) -> bool {
+    !expected_user_sid.is_empty()
+        && !actual_user_sid.is_empty()
+        && actual_user_sid.eq_ignore_ascii_case(expected_user_sid)
+}
+
+pub fn run_plan_file(path: &str, expected_user_sid: &str) -> i32 {
+    let actual_user_sid = crate::native::current_user_sid();
+    if !caller_sid_matches(expected_user_sid, &actual_user_sid) {
+        eprintln!("Rejected elevated plan: it was requested by a different Windows account");
+        return 6;
+    }
+    let (plan_path, result_path) = match validate_elevated_plan_path(path) {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("Rejected elevated plan: {}", error);
+            return 4;
+        }
+    };
+    let text = match std::fs::read_to_string(&plan_path) {
         Ok(t) => t,
         Err(_) => return 2,
     };
@@ -875,7 +1161,7 @@ pub fn run_plan_file(path: &str) -> i32 {
     for name in &plan.services {
         let rc = crate::native::stop_delete_service(name);
         if rc == 0 {
-            res.log.push(format!("service removed: {}", name));
+            res.record_removed(format!("service removed: {}", name));
         } else {
             // Counted like every other failure: the caller reports `failed`
             // back to the user, so a swallowed code would read as success.
@@ -887,20 +1173,23 @@ pub fn run_plan_file(path: &str) -> i32 {
     for task in &plan.tasks {
         let rc = crate::native::delete_scheduled_task(task);
         if rc == 0 {
-            res.log.push(format!("task removed: {}", task));
+            res.record_removed(format!("task removed: {}", task));
         } else {
             res.failed += 1;
             res.log.push(format!("task failed: {} (code {})", task, rc));
         }
     }
     for key in &plan.delete_reg {
-        let root = match key.0.as_str() {
-            "HKLM" => RegRoot::Hklm,
-            "HKLM-32" => RegRoot::Hklm32,
-            _ => RegRoot::Hkcu,
+        let Some(root) = reg_root_from_label(&key.0) else {
+            res.failed += 1;
+            res.log.push(format!(
+                "registry rejected: unknown root {} for {}",
+                key.0, key.1
+            ));
+            continue;
         };
         match delete_reg_key(root, &key.1) {
-            Ok(_) => res.log.push(format!("registry removed: {}", key.1)),
+            Ok(_) => res.record_removed(format!("registry removed: {}", key.1)),
             Err(e) => {
                 res.failed += 1;
                 res.log.push(format!("registry failed: {} ({})", key.1, e));
@@ -927,18 +1216,35 @@ pub fn run_plan_file(path: &str) -> i32 {
             continue;
         }
         let r = crate::native::force_delete(sc);
+        res.deleted += r.deleted.max(0) as u32;
         if r.failed > 0 {
-            res.failed += 1;
+            res.failed += r.failed.max(0) as u32;
             res.log
                 .push(format!("shortcut failed: {} ({})", sc, r.first_error));
         } else {
-            res.deleted += r.deleted.max(0) as u32;
             res.log.push(format!("shortcut removed: {}", sc));
         }
     }
 
-    if let Ok(text) = serde_json::to_string_pretty(&res) {
-        let _ = std::fs::write(&plan.result_path, text);
+    let result_text = match serde_json::to_string_pretty(&res) {
+        Ok(text) => text,
+        Err(_) => return 5,
+    };
+    // create_new is deliberate: an existing file, symlink, or junction must
+    // never be followed/truncated by the elevated process.
+    let mut output = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&result_path)
+    {
+        Ok(file) => file,
+        Err(error) => {
+            eprintln!("Could not safely create elevated result file: {}", error);
+            return 5;
+        }
+    };
+    if output.write_all(result_text.as_bytes()).is_err() || output.flush().is_err() {
+        return 5;
     }
     0
 }
@@ -968,6 +1274,7 @@ fn verify_all(
     tasks: &[String],
     shortcuts: &[String],
     package: Option<&str>,
+    tasks_unknown: bool,
 ) -> Verdict {
     // Flipping to UnknownState the first time a probe fails, so a broken probe
     // can never be reported as clean.
@@ -977,7 +1284,8 @@ fn verify_all(
         }
     }
 
-    let mut unknown: Option<String> = None;
+    let mut unknown: Option<String> = tasks_unknown
+        .then(|| "Could not check scheduled tasks (the task list could not be read)".to_string());
     let mut left: Vec<String> = Vec::new();
 
     for p in paths.iter().chain(shortcuts.iter()) {
@@ -995,18 +1303,33 @@ fn verify_all(
         }
     }
     for name in services {
-        if crate::native::service_exists(name) == Some(true) {
-            left.push(format!("service {}", name));
+        match crate::native::service_exists(name) {
+            Some(true) => left.push(format!("service {}", name)),
+            Some(false) => {}
+            None => note_unknown(&mut unknown, name, "service query failed"),
         }
     }
-    for name in tasks {
-        if crate::native::task_exists(name) == Some(true) {
-            left.push(format!("task {}", name));
+    if !tasks.is_empty() {
+        match crate::native::tasks_exist(tasks) {
+            Some(states) => {
+                for (name, exists) in tasks.iter().zip(states) {
+                    if exists {
+                        left.push(format!("task {}", name));
+                    }
+                }
+            }
+            None => note_unknown(
+                &mut unknown,
+                "scheduled tasks",
+                "the inventory query failed or was incomplete",
+            ),
         }
     }
     if let Some(full) = package {
-        if crate::native::package_registered(full) == Some(true) {
-            left.push(format!("package {}", full));
+        match crate::native::package_registered(full) {
+            Some(true) => left.push(format!("package {}", full)),
+            Some(false) => {}
+            None => note_unknown(&mut unknown, full, "package query failed"),
         }
     }
 
@@ -1030,6 +1353,7 @@ fn verify_all(
 struct Runner {
     tx: Sender<(usize, StepStatus, String)>,
     verified_gone: bool,
+    restore_point: Option<(i64, usize)>,
     app: AppEntry,
     backup_dir: PathBuf,
     log: Vec<String>,
@@ -1063,9 +1387,10 @@ impl Runner {
         self.verified_gone
     }
 
-    fn exec(&mut self, _idx: usize, op: &Op) -> (StepStatus, String) {
+    fn exec(&mut self, idx: usize, op: &Op) -> (StepStatus, String) {
         match op {
             Op::Nothing => (StepStatus::Skip, "This step is not needed".into()),
+            Op::Note { message } => (StepStatus::Warn, message.clone()),
             Op::KillProcesses { path } => {
                 let n = crate::native::count_processes_in(path);
                 if n == 0 {
@@ -1079,9 +1404,13 @@ impl Runner {
                 }
             }
             Op::RestorePoint { desc } => {
-                let rc = crate::native::create_restore_point(desc);
+                let (rc, sequence) = crate::native::create_restore_point(desc);
                 if rc == 0 {
-                    (StepStatus::Ok, "Restore point created".into())
+                    self.restore_point = Some((sequence, idx));
+                    (
+                        StepStatus::Ok,
+                        format!("Restore point created (sequence {})", sequence),
+                    )
                 } else if rc == 5 {
                     (StepStatus::Warn, "Administrator rights are required".into())
                 } else {
@@ -1452,18 +1781,26 @@ impl Runner {
                 reg,
                 services,
                 tasks,
+                tasks_unknown,
                 shortcuts,
                 package,
             } => {
-                let (st, detail) =
-                    match verify_all(paths, reg, services, tasks, shortcuts, package.as_deref()) {
-                        Verdict::Gone => {
-                            self.verified_gone = true;
-                            (StepStatus::Ok, "Removed completely".to_string())
-                        }
-                        Verdict::Left(what) => (StepStatus::Warn, what),
-                        Verdict::UnknownState(what) => (StepStatus::Warn, what),
-                    };
+                let (st, detail) = match verify_all(
+                    paths,
+                    reg,
+                    services,
+                    tasks,
+                    shortcuts,
+                    package.as_deref(),
+                    *tasks_unknown,
+                ) {
+                    Verdict::Gone => {
+                        self.verified_gone = true;
+                        (StepStatus::Ok, "Removed completely".to_string())
+                    }
+                    Verdict::Left(what) => (StepStatus::Warn, what),
+                    Verdict::UnknownState(what) => (StepStatus::Warn, what),
+                };
                 (st, detail)
             }
             Op::CleanTemp => {
@@ -1500,6 +1837,10 @@ impl Runner {
 
 pub fn spawn(app: AppEntry, flow: Flow, settings: Settings, keep_data: bool) -> Job {
     let steps = build_plan(&app, flow, &settings, keep_data);
+    spawn_with_steps(app, flow, settings, steps)
+}
+
+fn spawn_with_steps(app: AppEntry, flow: Flow, settings: Settings, steps: Vec<Step>) -> Job {
     let (tx, rx) = channel();
     let app_id = app.id;
     let app_name = app.name.clone();
@@ -1514,6 +1855,7 @@ pub fn spawn(app: AppEntry, flow: Flow, settings: Settings, keep_data: bool) -> 
     let runner = Runner {
         tx: tx.clone(),
         verified_gone: false,
+        restore_point: None,
         app: app.clone(),
         backup_dir,
         log: Vec::new(),
@@ -1558,6 +1900,28 @@ pub fn spawn(app: AppEntry, flow: Flow, settings: Settings, keep_data: bool) -> 
                 }
                 // Small pause so the UI can show progress on instant steps.
                 thread::sleep(std::time::Duration::from_millis(40));
+            }
+            if let Some((sequence, restore_step)) = r.restore_point.take() {
+                let end_rc = crate::native::end_restore_point(sequence);
+                let (status, detail) = if end_rc == 0 {
+                    (
+                        StepStatus::Ok,
+                        format!(
+                            "Restore point sequence {}; cleanup change notification completed",
+                            sequence
+                        ),
+                    )
+                } else {
+                    (
+                        StepStatus::Warn,
+                        format!(
+                            "Restore point sequence {} was created, but Windows could not close the change notification (code {})",
+                            sequence, end_rc
+                        ),
+                    )
+                };
+                r.log.push(format!("restore-point completion: {}", detail));
+                r.emit(restore_step, status, detail);
             }
             let _ = r.tx.send((total, StepStatus::Ok, String::new()));
         })
@@ -1764,9 +2128,21 @@ pub fn selftest() -> i32 {
         kill_processes: true,
         ..Default::default()
     };
+    if settings.create_restore_point && !crate::native::initialize_restore_point_com_security() {
+        eprintln!("selftest: System Restore COM security initialization failed");
+        return 1;
+    }
 
     println!("selftest root: {}", root.display());
-    let mut job = spawn(app, Flow::Purge, settings, false);
+    let steps = build_plan_with_discovery(
+        &app,
+        Flow::Purge,
+        &settings,
+        false,
+        |_| Some(Vec::new()),
+        |_| Some(Vec::new()),
+    );
+    let mut job = spawn_with_steps(app, Flow::Purge, settings, steps);
     let mut last = usize::MAX;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
@@ -1937,6 +2313,7 @@ pub fn selftest() -> i32 {
         &[],
         &[],
         None,
+        false,
     ) {
         Verdict::Gone => {}
         other => {
@@ -1990,6 +2367,7 @@ pub fn selftest() -> i32 {
     if dir_gone
         && reg_gone
         && failures == 0
+        && verify_failures == 0
         && bk_failures == 0
         && path_failures == 0
         && acl_failures == 0
@@ -2012,8 +2390,53 @@ mod tests {
         a
     }
 
+    fn build_plan_for_test(
+        app: &AppEntry,
+        flow: Flow,
+        settings: &Settings,
+        keep_data: bool,
+    ) -> Vec<Step> {
+        // Plan tests must not depend on which Windows services or tasks happen
+        // to be installed on the CI runner.
+        build_plan_with_discovery(
+            app,
+            flow,
+            settings,
+            keep_data,
+            |_| Some(Vec::new()),
+            |_| Some(Vec::new()),
+        )
+    }
+
     fn any_op(steps: &[Step], f: impl Fn(&Op) -> bool) -> bool {
         steps.iter().any(|s| f(&s.op))
+    }
+
+    #[test]
+    fn namespace_marker_install_dirs_block_the_whole_plan() {
+        // The planner itself must reject these paths with an explicit block
+        // and plan no destructive step, whatever the predicate returns.
+        for dir in [r"\\?\", r"\\.\"] {
+            let a = app("Demo", dir);
+            let steps = build_plan_for_test(&a, Flow::Purge, &Settings::default(), false);
+            assert!(
+                steps.iter().any(|s| s.title == "Cleanup blocked"),
+                "{dir} must block the plan"
+            );
+            assert!(
+                !any_op(&steps, |o| !matches!(o, Op::Note { .. })),
+                "{dir} must not plan a destructive step"
+            );
+        }
+    }
+
+    #[test]
+    fn registry_root_labels_round_trip_and_unknown_labels_are_rejected() {
+        for root in [RegRoot::Hklm, RegRoot::Hklm32, RegRoot::Hkcu] {
+            assert_eq!(reg_root_from_label(root.label()), Some(root));
+        }
+        assert_eq!(reg_root_from_label("HKCU-64"), None);
+        assert_eq!(reg_root_from_label(""), None);
     }
 
     #[test]
@@ -2030,6 +2453,17 @@ mod tests {
         assert!(matches!(status, StepStatus::Warn));
         // Nothing to do is not a failure.
         assert!(matches!(partial(0, 0, "x:").0, StepStatus::Ok));
+    }
+
+    #[test]
+    fn elevated_result_counts_successful_non_file_resources() {
+        let mut result = PurgeResult::default();
+        result.record_removed("service removed: DemoService".into());
+        result.record_removed("task removed: \\Demo\\Task".into());
+        result.record_removed("registry removed: Software\\Demo".into());
+        assert_eq!(result.deleted, 3);
+        assert_eq!(result.failed, 0);
+        assert_eq!(result.log.len(), 3);
     }
 
     #[test]
@@ -2097,7 +2531,7 @@ mod tests {
     #[test]
     fn files_only_touches_the_folder() {
         let a = app("Demo", "D:\\Apps\\Demo");
-        let steps = build_plan(&a, Flow::FilesOnly, &Settings::default(), true);
+        let steps = build_plan_for_test(&a, Flow::FilesOnly, &Settings::default(), true);
         assert!(any_op(&steps, |o| matches!(o, Op::Recycle { .. })));
         assert!(any_op(&steps, |o| matches!(o, Op::ForceDelete { .. })));
         assert!(any_op(&steps, |o| matches!(o, Op::Verify { .. })));
@@ -2112,7 +2546,7 @@ mod tests {
         let mut a = app("Demo", "D:\\Apps\\Demo");
         a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
         a.shortcuts = vec![PathBuf::from("D:\\Start\\Demo.lnk")];
-        let steps = build_plan(&a, Flow::FilesOnly, &Settings::default(), true);
+        let steps = build_plan_for_test(&a, Flow::FilesOnly, &Settings::default(), true);
         let v = steps
             .iter()
             .find_map(|s| match &s.op {
@@ -2129,7 +2563,7 @@ mod tests {
         let mut a = app("Demo", "D:\\Apps\\Demo");
         a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
         for flow in [Flow::Uninstall, Flow::Purge, Flow::FilesOnly] {
-            let steps = build_plan(&a, flow, &Settings::default(), true);
+            let steps = build_plan_for_test(&a, flow, &Settings::default(), true);
             let verifies: Vec<&Step> = steps
                 .iter()
                 .filter(|s| matches!(s.op, Op::Verify { .. }))
@@ -2157,7 +2591,7 @@ mod tests {
     fn purge_verifies_the_registry_it_removed() {
         let mut a = app("Demo", "D:\\Apps\\Demo");
         a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
-        let steps = build_plan(&a, Flow::Purge, &Settings::default(), true);
+        let steps = build_plan_for_test(&a, Flow::Purge, &Settings::default(), true);
         let reg = steps.iter().find_map(|s| match &s.op {
             Op::Verify { reg, .. } => Some(reg.clone()),
             _ => None,
@@ -2173,21 +2607,94 @@ mod tests {
         // A path that cannot exist on this machine: verified as gone.
         let missing = "D:\\Apps\\AppSweep-verify-does-not-exist-42";
         assert_eq!(
-            verify_all(&[missing.to_string()], &[], &[], &[], &[], None),
+            verify_all(&[missing.to_string()], &[], &[], &[], &[], None, false),
             Verdict::Gone
         );
         // Nothing tracked at all is not proof of anything either: there is
         // simply nothing to report as left, so it stays Gone only when every
         // requested probe answered.
-        assert_eq!(verify_all(&[], &[], &[], &[], &[], None), Verdict::Gone);
+        assert_eq!(
+            verify_all(&[], &[], &[], &[], &[], None, false),
+            Verdict::Gone
+        );
         // A path that does exist is left behind, never a clean pass.
         let here = std::env::current_exe()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        match verify_all(&[here], &[], &[], &[], &[], None) {
+        match verify_all(&[here], &[], &[], &[], &[], None, false) {
             Verdict::Left(msg) => assert!(msg.starts_with("Still on disk:")),
             other => panic!("expected Left, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn elevated_plan_requires_the_same_windows_account() {
+        assert!(caller_sid_matches("S-1-5-21-123", "s-1-5-21-123"));
+        assert!(!caller_sid_matches("S-1-5-21-123", "S-1-5-21-456"));
+        assert!(!caller_sid_matches("", "S-1-5-21-123"));
+        assert!(!caller_sid_matches("S-1-5-21-123", ""));
+    }
+
+    #[test]
+    fn incomplete_service_or_task_inventory_blocks_destructive_plans() {
+        let a = app("Demo", "D:\\Apps\\Demo");
+        let settings = Settings::default();
+        let services_unknown = build_plan_with_discovery(
+            &a,
+            Flow::Purge,
+            &settings,
+            true,
+            |_| None,
+            |_| Some(Vec::new()),
+        );
+        assert_eq!(services_unknown.len(), 1);
+        assert_eq!(services_unknown[0].title, "Cleanup cancelled");
+
+        let tasks_unknown = build_plan_with_discovery(
+            &a,
+            Flow::Uninstall,
+            &settings,
+            true,
+            |_| Some(Vec::new()),
+            |_| None,
+        );
+        assert_eq!(tasks_unknown.len(), 1);
+        assert_eq!(tasks_unknown[0].title, "Cleanup cancelled");
+    }
+
+    #[test]
+    fn files_only_does_not_query_services_or_tasks() {
+        let a = app("Demo", "D:\\Apps\\Demo");
+        let steps = build_plan_with_discovery(
+            &a,
+            Flow::FilesOnly,
+            &Settings::default(),
+            true,
+            |_| panic!("FilesOnly must not enumerate services"),
+            |_| panic!("FilesOnly must not enumerate scheduled tasks"),
+        );
+        assert!(any_op(&steps, |op| matches!(op, Op::ForceDelete { .. })));
+    }
+
+    #[test]
+    fn incomplete_task_discovery_blocks_destructive_flows() {
+        assert!(cleanup_blocked_by_resource_discovery(Flow::Uninstall, true));
+        assert!(cleanup_blocked_by_resource_discovery(Flow::Purge, true));
+        assert!(!cleanup_blocked_by_resource_discovery(
+            Flow::FilesOnly,
+            true
+        ));
+        assert!(!cleanup_blocked_by_resource_discovery(Flow::Purge, false));
+    }
+
+    #[test]
+    fn unknown_task_discovery_never_reports_complete_removal() {
+        assert_eq!(
+            verify_all(&[], &[], &[], &[], &[], None, true),
+            Verdict::UnknownState(
+                "Could not check scheduled tasks (the task list could not be read)".to_string()
+            )
+        );
     }
 
     #[test]
@@ -2195,7 +2702,7 @@ mod tests {
         let mut a = app("Demo", "D:\\Apps\\Demo");
         a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
         a.shortcuts = vec![PathBuf::from("D:\\Start\\Demo.lnk")];
-        let steps = build_plan(&a, Flow::Purge, &Settings::default(), true);
+        let steps = build_plan_for_test(&a, Flow::Purge, &Settings::default(), true);
         assert!(any_op(
             &steps,
             |o| matches!(o, Op::DeleteReg { keys } if !keys.is_empty())
@@ -2212,7 +2719,7 @@ mod tests {
     fn a_backup_is_taken_before_any_registry_deletion() {
         let mut a = app("Demo", "D:\\Apps\\Demo");
         a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
-        let steps = build_plan(&a, Flow::Purge, &Settings::default(), true);
+        let steps = build_plan_for_test(&a, Flow::Purge, &Settings::default(), true);
         let backup = steps
             .iter()
             .position(|s| matches!(s.op, Op::BackupRegistry { .. }));
@@ -2234,7 +2741,7 @@ mod tests {
         ] {
             let a = app(name, dir);
             for flow in [Flow::Uninstall, Flow::Purge, Flow::FilesOnly] {
-                let steps = build_plan(&a, flow, &Settings::default(), true);
+                let steps = build_plan_for_test(&a, flow, &Settings::default(), true);
                 for s in &steps {
                     let paths: Vec<&String> = match &s.op {
                         Op::ForceDelete { paths }

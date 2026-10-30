@@ -1,7 +1,6 @@
 # CodeQL + GitHub Advanced Security — static analysis
 
-**Role:** not an AI. Static security analysis of the Rust sources and the C++
-helper.
+**Role:** not an AI. Static security analysis of the Rust sources.
 
 **Acts on:** push and pull request to `main`, plus a weekly cron (Mondays 03:17
 UTC). `build-mode: none`, so it parses instead of compiling.
@@ -19,8 +18,6 @@ dismiss it with a reason, in the same week.
 
 - Rust support is in public preview, and `build-mode: none` does not see code
   generated during the build. Fewer results, not wrong ones.
-- The C++ helper is a single file compiled by `cc` in `build.rs`; macro-heavy
-  or platform-gated code is analysed as source, not as built.
 
 ## Rules
 

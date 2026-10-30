@@ -26,10 +26,10 @@ jobs:
 
       - uses: github/codeql-action/init@v4
         with:
-          # src/ is Rust and native/helper.cpp is C++; `none` parses both
-          # without an MSVC build, and this repo generates no source at build
-          # time (build.rs only compiles the helper and the icon).
-          languages: rust, c-cpp
+          # Every target is Rust now (the C++ helper is gone), and `none`
+          # parses it without a Windows build. build.rs embeds Windows
+          # resources (icon and manifest) and product metadata.
+          languages: rust
           build-mode: none
 
       - uses: github/codeql-action/analyze@v4

@@ -8,7 +8,16 @@ pub fn is_protected_dir(dir: &std::path::Path) -> bool {
             .replace('/', "\\")
             .to_lowercase()
     };
-    let target = norm(&dir.to_string_lossy());
+    // Namespace markers must be detected before trailing separators are
+    // trimmed: a bare "\\?\" would otherwise reduce to "\\?" and slip past
+    // every guard below.
+    let raw = dir.to_string_lossy().replace('/', "\\").to_lowercase();
+    if raw.starts_with(r"\\?\") || raw.starts_with(r"\\.\") {
+        // Extended/device namespaces are intentionally unsupported for app
+        // cleanup: checking only their textual prefix can bypass guarded roots.
+        return true;
+    }
+    let target = raw.trim_end_matches('\\');
     if target.is_empty() {
         return true;
     }
@@ -327,6 +336,22 @@ mod tests {
         assert_eq!(human_size(1024), "1.00 KB");
         assert_eq!(human_size(100 * 1024 * 1024), "100 MB");
         assert_eq!(human_size(3 * 1024 * 1024 * 1024), "3.00 GB");
+    }
+
+    #[test]
+    fn extended_and_device_namespace_paths_are_protected() {
+        // Exact markers survive trailing-separator trimming and must stay
+        // protected on their own, not only when they prefix a longer path.
+        assert!(is_protected_dir(std::path::Path::new(r"\\?\")));
+        assert!(is_protected_dir(std::path::Path::new(r"\\.\")));
+        assert!(is_protected_dir(std::path::Path::new(r"\\?\C:\Windows")));
+        assert!(is_protected_dir(std::path::Path::new(r"\\.\C:\Windows")));
+        assert!(is_protected_dir(std::path::Path::new(
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1"
+        )));
+        assert!(is_protected_dir(std::path::Path::new(
+            r"\\?\UNC\server\share\Windows"
+        )));
     }
 
     #[test]
