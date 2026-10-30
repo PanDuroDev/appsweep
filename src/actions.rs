@@ -588,7 +588,8 @@ where
                     key: key.clone(),
                 },
                 false,
-                true,
+                // A missing backup is a reason to stop, not a detail to skip.
+                false,
             );
         }
     }
@@ -1421,40 +1422,60 @@ impl Runner {
                 }
             }
             Op::BackupRegistry { root, key } => {
-                let _ = std::fs::create_dir_all(&self.backup_dir);
-                // One file per run: a second uninstall of the same app must not
-                // overwrite the snapshot taken before the first one.
+                if let Err(err) = std::fs::create_dir_all(&self.backup_dir) {
+                    return (
+                        StepStatus::Fail,
+                        format!("Could not create the backup folder ({})", err),
+                    );
+                }
                 let stamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
+                    .map(|d| d.as_millis())
                     .unwrap_or(0);
-                let safe: String = self
-                    .app
-                    .name
-                    .chars()
-                    .map(|c| if c.is_alphanumeric() { c } else { '_' })
-                    .collect();
-                let file = self
-                    .backup_dir
-                    .join(format!("{}-{}-{}.reg", safe, root.label(), stamp));
-                let full = match root {
-                    RegRoot::Hklm => format!("HKLM\\{}", key),
-                    RegRoot::Hklm32 => format!("HKLM\\{}", key),
-                    RegRoot::Hkcu => format!("HKCU\\{}", key),
-                };
-                let cmd = format!("reg export \"{}\" \"{}\" /y", full, file.to_string_lossy());
-                let (rc, _) = crate::native::run_cmd(&cmd, true);
-                if rc == 0 && file.exists() {
-                    // Only the file name: a full path mixed with Arabic text
-                    // cannot be rendered correctly by epaint.
-                    let name = file
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    (StepStatus::Ok, name)
+                let file = self.backup_dir.join(backup_file_name(
+                    &self.app.name,
+                    *root,
+                    stamp,
+                    std::process::id(),
+                ));
+                // Export into a staging name and only promote it once the file
+                // proves it is this key's export. A stale or half-written file
+                // must never be presented as the backup taken before removal.
+                let staging = file.with_extension("part");
+                let _ = std::fs::remove_file(&staging);
+                let full = format!("{}\\{}", root.hive(), key);
+                let cmd = format!(
+                    "reg export \"{}\" \"{}\" /y {}",
+                    full,
+                    staging.to_string_lossy(),
+                    root.view_flag()
+                );
+                let (rc, code) = crate::native::run_cmd(&cmd, true);
+                let failed = if rc != 0 {
+                    Some(format!("Could not start the registry export (code {})", rc))
+                } else if code != 0 {
+                    Some(format!("The registry export failed (code {})", code))
                 } else {
-                    (StepStatus::Warn, "Could not export the registry key".into())
+                    validate_export(&staging, *root, key).err()
+                };
+                if let Some(why) = failed {
+                    let _ = std::fs::remove_file(&staging);
+                    return (StepStatus::Fail, why);
                 }
+                if let Err(err) = std::fs::rename(&staging, &file) {
+                    let _ = std::fs::remove_file(&staging);
+                    return (
+                        StepStatus::Fail,
+                        format!("Could not keep the registry backup ({})", err),
+                    );
+                }
+                // Only the file name: a full path mixed with Arabic text
+                // cannot be rendered correctly by epaint.
+                let name = file
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                (StepStatus::Ok, name)
             }
             Op::RunUninstaller { cmd } => {
                 if cmd.trim().is_empty() {
@@ -1877,7 +1898,18 @@ fn spawn_with_steps(app: AppEntry, flow: Flow, settings: Settings, steps: Vec<St
             // stops the chain so the user can inspect what happened. With it
             // on, every remaining method is tried in order.
             let mut stop_chain = false;
+            // Set when the registry backup fails: nothing destructive may run
+            // after that, whatever `auto_cascade` says.
+            let mut backup_failed = false;
             for (idx, op, skip_if_gone, optional) in step_ops {
+                if backup_failed && !matches!(op, Op::Verify { .. }) {
+                    r.emit(
+                        idx,
+                        StepStatus::Skip,
+                        "Skipped because the registry backup failed",
+                    );
+                    continue;
+                }
                 if stop_chain && optional {
                     r.emit(
                         idx,
@@ -1895,6 +1927,9 @@ fn spawn_with_steps(app: AppEntry, flow: Flow, settings: Settings, steps: Vec<St
                 r.log.push(format!("{}: {}", idx, detail));
                 let failed = st == StepStatus::Fail;
                 r.emit(idx, st, detail);
+                if failed && matches!(op, Op::BackupRegistry { .. }) {
+                    backup_failed = true;
+                }
                 if failed && !auto_cascade {
                     stop_chain = true;
                 }
@@ -2065,23 +2100,71 @@ pub fn clear_backups() -> Result<usize, String> {
     Ok(n)
 }
 
+/// File name for one registry snapshot.
+///
+/// Milliseconds and the process id make two attempts unique even when they
+/// start in the same second or come from two AppSweep processes, and the
+/// sanitized app name is only there for readability.
+fn backup_file_name(app: &str, root: RegRoot, stamp: u128, pid: u32) -> String {
+    let safe: String = app
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("{}-{}-{}-{}.reg", safe, root.label(), stamp, pid)
+}
+
+/// Reads a `.reg` file, which `reg export` writes as UTF-16LE with a BOM.
+fn read_reg_text(path: &Path) -> Result<String, String> {
+    let bytes =
+        std::fs::read(path).map_err(|e| format!("Could not read the new backup ({})", e))?;
+    if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
+        let (pairs, _) = bytes[2..].as_chunks::<2>();
+        let units: Vec<u16> = pairs.iter().map(|c| u16::from_le_bytes(*c)).collect();
+        return Ok(String::from_utf16_lossy(&units));
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Proves that a fresh export contains the key that was meant to be saved.
+/// A file left behind by an earlier attempt must not pass this.
+fn validate_export(path: &Path, root: RegRoot, key: &str) -> Result<(), String> {
+    let text = read_reg_text(path)?;
+    if !text.starts_with("Windows Registry Editor Version 5.00") && !text.starts_with("REGEDIT4") {
+        return Err("The export did not look like a registry file".into());
+    }
+    let expected = format!("[{}\\{}]", root.hive_long(), key);
+    if !text
+        .lines()
+        .any(|line| line.trim().eq_ignore_ascii_case(&expected))
+    {
+        return Err(format!(
+            "The export did not contain {}; the backup was discarded",
+            expected
+        ));
+    }
+    Ok(())
+}
+
 /// Registry root named by a backup file: `"<app>-<ROOT>.reg"` for the old
-/// names, `"<app>-<ROOT>-<seconds>.reg"` for the timestamped ones.
+/// names, `"<app>-<ROOT>-<stamp>-<pid>.reg"` for the timestamped ones.
 fn backup_root_of(file: &str) -> String {
     let stem = file
         .strip_suffix(".reg")
         .or_else(|| file.strip_suffix(".REG"))
         .unwrap_or(file);
-    let parts: Vec<&str> = stem.rsplit('-').collect();
-    // A trailing all-digit part is the timestamp, not the root.
-    let root = match parts.as_slice() {
-        [last, ..] if last.chars().all(|c| c.is_ascii_digit()) && last.len() >= 9 => {
-            parts.get(1).copied().unwrap_or("")
+    let parts: Vec<&str> = stem.split('-').collect();
+    // `HKLM-32` has to be tested first: it contains the `HKLM` token.
+    for (index, part) in parts.iter().enumerate() {
+        if *part == "HKLM" && parts.get(index + 1) == Some(&"32") {
+            return "HKLM-32".to_string();
         }
-        [last, ..] => last,
-        [] => "",
-    };
-    root.to_string()
+    }
+    for part in parts.iter().rev() {
+        if *part == "HKLM" || *part == "HKLM32" || *part == "HKCU" {
+            return (*part).to_string();
+        }
+    }
+    String::new()
 }
 
 /// Total size of every saved backup, in bytes.
@@ -2722,13 +2805,20 @@ mod tests {
         let steps = build_plan_for_test(&a, Flow::Purge, &Settings::default(), true);
         let backup = steps
             .iter()
-            .position(|s| matches!(s.op, Op::BackupRegistry { .. }));
+            .position(|s| matches!(s.op, Op::BackupRegistry { .. }))
+            .expect("a registry backup step");
         let delete = steps
             .iter()
-            .position(|s| matches!(s.op, Op::DeleteReg { .. }));
-        if let (Some(b), Some(d)) = (backup, delete) {
-            assert!(b < d, "registry must be exported before it is deleted");
-        }
+            .position(|s| matches!(s.op, Op::DeleteReg { .. }))
+            .expect("a registry delete step");
+        assert!(
+            backup < delete,
+            "registry must be exported before it is deleted"
+        );
+        assert!(
+            !steps[backup].optional,
+            "a missing backup must stop the run"
+        );
     }
 
     #[test]
@@ -2819,7 +2909,52 @@ mod tests {
         // "A/B" and "A:B" both become "A_B" for the file name, but the folder
         // is what separates them in the backup manager.
         assert_eq!(backup_root_of("A_B-HKCU-1700000000.reg"), "HKCU");
-        assert_eq!(backup_root_of("no-root-suffix.reg"), "suffix");
+        // An unparseable name is unknown, not the last word of the file name.
+        assert_eq!(backup_root_of("no-root-suffix.reg"), "");
+    }
+
+    #[test]
+    fn a_backup_name_is_unique_and_keeps_its_registry_view() {
+        let first = backup_file_name("A/B", RegRoot::Hklm32, 1_700_000_000_000, 10);
+        let same_ms_other_process = backup_file_name("A/B", RegRoot::Hklm32, 1_700_000_000_000, 11);
+        let next_ms = backup_file_name("A/B", RegRoot::Hklm32, 1_700_000_000_001, 10);
+        assert_ne!(first, same_ms_other_process);
+        assert_ne!(first, next_ms);
+        assert!(first.contains("-HKLM-32-"));
+        assert_eq!(backup_root_of(&first), "HKLM-32");
+        assert_eq!(
+            backup_root_of("Demo-HKLM-32-1700000000123-4567.reg"),
+            "HKLM-32"
+        );
+        assert_eq!(backup_root_of("Demo-HKLM-1700000000.reg"), "HKLM");
+    }
+
+    #[test]
+    fn the_32_bit_root_is_read_from_the_32_bit_view() {
+        assert_eq!(RegRoot::Hklm32.view_flag(), "/reg:32");
+        assert_eq!(RegRoot::Hklm.view_flag(), "/reg:64");
+        assert_eq!(RegRoot::Hkcu.view_flag(), "/reg:64");
+    }
+
+    #[test]
+    fn only_a_file_that_holds_the_exported_key_is_a_backup() {
+        let dir = std::env::temp_dir().join(format!("appsweep-reg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = "Windows Registry Editor Version 5.00\r\n\r\n\
+                    [HKEY_LOCAL_MACHINE\\Software\\Demo]\r\n\"x\"=\"y\"\r\n";
+        let mut utf16 = vec![0xFF, 0xFE];
+        for unit in text.encode_utf16() {
+            utf16.extend_from_slice(&unit.to_le_bytes());
+        }
+        let good = dir.join("good.reg");
+        std::fs::write(&good, utf16).unwrap();
+        assert!(validate_export(&good, RegRoot::Hklm, "Software\\Demo").is_ok());
+        // The same file does not prove that a different key was saved.
+        assert!(validate_export(&good, RegRoot::Hklm, "Software\\Other").is_err());
+        let empty = dir.join("empty.reg");
+        std::fs::write(&empty, b"").unwrap();
+        assert!(validate_export(&empty, RegRoot::Hklm, "Software\\Demo").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
