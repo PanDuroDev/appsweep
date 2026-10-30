@@ -284,6 +284,23 @@ impl Drop for DirectoryHandle {
     }
 }
 
+impl DirectoryHandle {
+    // Deletion by name requires the target's own handle closed (it denies
+    // delete sharing), but the ancestor pins must outlive it: they keep path
+    // resolution bound to the verified chain through the final removal and
+    // ACL rollback. The handles are opened root first, so the last one is the
+    // target.
+    fn release_target(&mut self) {
+        if let Some(handle) = self.0.pop() {
+            if !handle.is_null() && handle != -1isize as Handle {
+                unsafe {
+                    let _ = CloseHandle(handle);
+                }
+            }
+        }
+    }
+}
+
 #[repr(C)]
 struct ShellExecuteInfoW {
     cb_size: u32,
@@ -2742,9 +2759,11 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
         let entries = match listing {
             Ok(entries) => entries,
             Err(error) => {
-                drop(directory_guard.take());
+                if let Some(guard) = directory_guard.as_mut() {
+                    guard.release_target();
+                }
                 if let Some(snapshot) = early_snapshot.as_ref() {
-                    let restored = restore_acl_snapshot(path, snapshot);
+                    let restored = !is_reparse_point(path) && restore_acl_snapshot(path, snapshot);
                     record_delete_failure(
                         stats,
                         path,
@@ -2780,11 +2799,12 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
             }
         }
         if enumeration_failed {
-            drop(directory_guard.take());
-            if early_snapshot
-                .as_ref()
-                .is_some_and(|snapshot| !restore_acl_snapshot(path, snapshot))
-            {
+            if let Some(guard) = directory_guard.as_mut() {
+                guard.release_target();
+            }
+            if early_snapshot.as_ref().is_some_and(|snapshot| {
+                is_reparse_point(path) || !restore_acl_snapshot(path, snapshot)
+            }) {
                 record_delete_failure(
                     stats,
                     path,
@@ -2797,18 +2817,30 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
         // Keep the directory-chain handles alive while changing attributes;
         // this prevents a checked directory from being swapped for a junction.
         clear_readonly(path);
-        drop(directory_guard.take());
+        if let Some(guard) = directory_guard.as_mut() {
+            guard.release_target();
+        }
         match std::fs::remove_dir(path) {
             Ok(()) => stats.deleted += 1,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                // The target handle is gone for deletion; refuse to touch
+                // permissions if the path now resolves to a reparse point.
+                if is_reparse_point(path) {
+                    record_delete_failure(
+                        stats,
+                        path,
+                        "target was replaced by a reparse point; refusing permission changes",
+                    );
+                    return;
+                }
                 let snapshot = early_snapshot.or_else(|| acl_snapshot_and_relax(path));
                 clear_readonly(path);
                 match std::fs::remove_dir(path) {
                     Ok(()) => stats.deleted += 1,
                     Err(retry_error) => {
-                        let restored = snapshot
-                            .as_ref()
-                            .is_some_and(|saved| restore_acl_snapshot(path, saved));
+                        let restored = snapshot.as_ref().is_some_and(|saved| {
+                            !is_reparse_point(path) && restore_acl_snapshot(path, saved)
+                        });
                         record_delete_failure(
                             stats,
                             path,
@@ -2825,9 +2857,9 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
                 }
             }
             Err(error) => {
-                let restore_failed = early_snapshot
-                    .as_ref()
-                    .is_some_and(|snapshot| !restore_acl_snapshot(path, snapshot));
+                let restore_failed = early_snapshot.as_ref().is_some_and(|snapshot| {
+                    is_reparse_point(path) || !restore_acl_snapshot(path, snapshot)
+                });
                 let detail = if restore_failed {
                     format!(
                         "directory removal failed; permissions were not restored: {}",
