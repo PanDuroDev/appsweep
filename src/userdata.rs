@@ -191,7 +191,9 @@ mod tests {
             "Refusing to remove protected directory {}",
             dir.display()
         );
-        std::fs::remove_dir_all(dir).unwrap();
+        if let Err(e) = std::fs::remove_dir_all(dir) {
+            panic!("Could not remove {}: {e}", dir.display());
+        }
     }
 
     fn store_app(full: &str) -> AppEntry {
