@@ -172,10 +172,26 @@ mod tests {
     use super::*;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("appsweep-meta-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        p
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        loop {
+            let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let p = std::env::temp_dir()
+                .join(format!("appsweep-meta-{tag}-{}-{id}", std::process::id()));
+            match std::fs::create_dir(&p) {
+                Ok(()) => return p,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => panic!("Could not create {}: {e}", p.display()),
+            }
+        }
+    }
+
+    fn cleanup_temp_dir(dir: &Path) {
+        assert!(
+            !crate::model::is_protected_dir(dir),
+            "Refusing to remove protected directory {}",
+            dir.display()
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn store_app(full: &str) -> AppEntry {
@@ -313,7 +329,7 @@ mod tests {
         assert!(!apps[0].hidden);
         assert!(!apps[0].favorite);
         assert!(apps[0].notes.is_empty());
-        std::fs::remove_dir_all(dir).unwrap();
+        cleanup_temp_dir(&dir);
     }
 
     #[test]
@@ -343,7 +359,7 @@ mod tests {
                 assert!(!all.contains_key(&legacy));
             }
         }
-        std::fs::remove_dir_all(dir).unwrap();
+        cleanup_temp_dir(&dir);
     }
 
     #[test]
