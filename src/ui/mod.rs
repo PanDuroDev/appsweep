@@ -204,7 +204,9 @@ impl AppSweep {
             .apps
             .iter()
             .filter(|a| {
-                if a.hidden {
+                // The Hidden view is the only place a hidden app is listed,
+                // so it can always be brought back.
+                if a.hidden && self.filter != Filter::Hidden {
                     return false;
                 }
                 if a.is_system && !self.settings.show_system {
@@ -217,12 +219,13 @@ impl AppSweep {
                     return false;
                 }
                 match self.filter {
-                    Filter::All => true,
+                    Filter::All => !a.hidden,
                     Filter::Desktop => a.source == Source::Registry,
                     Filter::Store => a.source == Source::Uwp,
                     Filter::System => a.is_system,
                     Filter::Favorites => a.favorite,
                     Filter::Remnants => a.is_remnant(),
+                    Filter::Hidden => a.hidden,
                 }
             })
             .filter(|a| {
@@ -369,28 +372,36 @@ impl AppSweep {
                 }
             }
             Act::Favorite(id) => {
-                let mut changed = None;
                 if let Some(app) = self.apps.iter_mut().find(|a| a.id == id) {
-                    app.favorite = !app.favorite;
-                    changed = Some(app.clone());
-                }
-                if let Some(app) = changed {
-                    crate::userdata::save(&app);
+                    let previous = app.favorite;
+                    app.favorite = !previous;
+                    if let Err(err) = crate::userdata::save(app) {
+                        app.favorite = previous;
+                        self.set_status(err);
+                    }
                 }
             }
             Act::Hide(id) => {
-                let mut changed = None;
-                if let Some(app) = self.apps.iter_mut().find(|a| a.id == id) {
-                    app.hidden = true;
-                    changed = Some(app.clone());
-                }
-                if let Some(app) = changed {
-                    crate::userdata::save(&app);
-                }
+                let shown = if let Some(app) = self.apps.iter_mut().find(|a| a.id == id) {
+                    let previous = app.hidden;
+                    app.hidden = !previous;
+                    if let Err(err) = crate::userdata::save(app) {
+                        app.hidden = previous;
+                        self.set_status(err);
+                        return;
+                    }
+                    app.hidden
+                } else {
+                    return;
+                };
                 if self.selected == Some(id) {
                     self.selected = None;
                 }
-                self.set_status("App hidden from the list");
+                self.set_status(if shown {
+                    "App hidden from the list"
+                } else {
+                    "App is back in the list"
+                });
             }
             Act::Run(id) => {
                 if let Some(app) = self.find(id) {
@@ -615,6 +626,7 @@ impl AppSweep {
                         Filter::System,
                         Filter::Favorites,
                         Filter::Remnants,
+                        Filter::Hidden,
                     ] {
                         if dialogs::nav_pill(ui, &p, f.label(), self.filter == f) {
                             self.filter = f;
@@ -1114,13 +1126,12 @@ impl AppSweep {
                         Asked::CopyPath(id) => self.handle(Act::CopyPath(id), ctx),
                         Asked::Run(id) => self.handle(Act::Run(id), ctx),
                         Asked::SetNotes { app_id, notes } => {
-                            let mut changed = None;
                             if let Some(a) = self.apps.iter_mut().find(|a| a.id == app_id) {
-                                a.notes = notes;
-                                changed = Some(a.clone());
-                            }
-                            if let Some(a) = changed {
-                                crate::userdata::save(&a);
+                                let previous = std::mem::replace(&mut a.notes, notes);
+                                if let Err(err) = crate::userdata::save(a) {
+                                    a.notes = previous;
+                                    self.set_status(err);
+                                }
                             }
                         }
                         Asked::Confirm {
@@ -1166,8 +1177,10 @@ impl eframe::App for AppSweep {
         }
         if let Some(res) = done {
             self.apps = res.apps;
-            crate::userdata::apply(&mut self.apps);
             self.warnings = res.warnings;
+            if let Err(err) = crate::userdata::apply(&mut self.apps) {
+                self.warnings.push(err);
+            }
             self.scanning = false;
             self.scan_rx = None;
             self.scanned_once = true;

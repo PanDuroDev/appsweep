@@ -310,7 +310,12 @@ pub fn card(
             ui.close();
         }
         ui.separator();
-        if ui.button("Hide from list").clicked() {
+        let hide = if app.hidden {
+            "Show in list"
+        } else {
+            "Hide from list"
+        };
+        if ui.button(hide).clicked() {
             act = Some(Act::Hide(id));
             ui.close();
         }
