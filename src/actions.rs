@@ -492,9 +492,46 @@ fn cleanup_blocked_by_resource_discovery(flow: Flow, inventory_unknown: bool) ->
     inventory_unknown && matches!(flow, Flow::Uninstall | Flow::Purge)
 }
 
-pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bool) -> Vec<Step> {
+/// Another scanned entry that claims the same install folder, or a folder that
+/// contains this one (or is contained by it). Deleting either side would break
+/// the other app, so the planner keeps the folder instead.
+fn shared_with<'a>(app: &AppEntry, others: &'a [AppEntry]) -> Option<&'a AppEntry> {
+    let dir = app.install_dir.as_ref()?;
+    others.iter().find(|o| {
+        o.id != app.id
+            && o.install_dir
+                .as_ref()
+                .is_some_and(|d| install_dirs_overlap(d, dir))
+    })
+}
+
+fn install_dirs_overlap(a: &Path, b: &Path) -> bool {
+    let f = |p: &Path| {
+        p.to_string_lossy()
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase()
+    };
+    let (a, b) = (f(a), f(b));
+    let under = |child: &str, parent: &str| {
+        !parent.is_empty()
+            && child.len() > parent.len()
+            && child.starts_with(parent)
+            && child.as_bytes()[parent.len()] == b'\\'
+    };
+    !a.is_empty() && !b.is_empty() && (a == b || under(&a, &b) || under(&b, &a))
+}
+
+pub fn build_plan(
+    app: &AppEntry,
+    others: &[AppEntry],
+    flow: Flow,
+    settings: &Settings,
+    keep_data: bool,
+) -> Vec<Step> {
     build_plan_with_discovery(
         app,
+        others,
         flow,
         settings,
         keep_data,
@@ -505,6 +542,7 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
 
 fn build_plan_with_discovery<S, T>(
     app: &AppEntry,
+    others: &[AppEntry],
     flow: Flow,
     settings: &Settings,
     keep_data: bool,
@@ -547,6 +585,9 @@ where
         }];
     }
     let dir = app.install_dir.clone();
+    // A folder that another listed app also uses must not be deleted: the
+    // other app would break, and its own row could not be removed.
+    let shared = shared_with(app, others).map(|o| o.name.clone());
     // "Keep user data" means: only touch the program folder, never the
     // AppData / ProgramData leftovers that hold the user's own files.
     let traces = if keep_data {
@@ -719,7 +760,20 @@ where
                 true,
                 true,
             );
-            if let Some(d) = &dir {
+            if let Some(name) = &shared {
+                add(
+                    "Keep the shared program folder",
+                    &format!("{} also uses this folder", name),
+                    Op::Note {
+                        message: format!(
+                            "The folder is also used by {}, so it was not deleted",
+                            name
+                        ),
+                    },
+                    false,
+                    true,
+                );
+            } else if let Some(d) = &dir {
                 add(
                     "Delete the program folder",
                     "Delete file leftovers after removal",
@@ -763,12 +817,29 @@ where
         Flow::Purge => {
             let mut paths: Vec<String> = Vec::new();
             if let Some(d) = &dir {
-                paths.push(s(d));
+                if shared.is_none() {
+                    paths.push(s(d));
+                }
             }
             for t in &traces {
                 paths.push(s(t));
             }
             paths = safe_paths(paths);
+
+            if let Some(name) = &shared {
+                add(
+                    "Keep the shared program folder",
+                    &format!("{} also uses this folder", name),
+                    Op::Note {
+                        message: format!(
+                            "The folder is also used by {}, so it was not deleted",
+                            name
+                        ),
+                    },
+                    false,
+                    true,
+                );
+            }
 
             if !svc_names.is_empty() {
                 add(
@@ -865,7 +936,20 @@ where
             );
         }
         Flow::FilesOnly => {
-            if let Some(d) = &dir {
+            if let Some(name) = &shared {
+                add(
+                    "Keep the shared program folder",
+                    &format!("{} also uses this folder", name),
+                    Op::Note {
+                        message: format!(
+                            "The folder is also used by {}, so it was not deleted",
+                            name
+                        ),
+                    },
+                    false,
+                    true,
+                );
+            } else if let Some(d) = &dir {
                 let only = safe_paths(vec![s(d)]);
                 if !only.is_empty() {
                     add(
@@ -1835,8 +1919,14 @@ impl Runner {
     }
 }
 
-pub fn spawn(app: AppEntry, flow: Flow, settings: Settings, keep_data: bool) -> Job {
-    let steps = build_plan(&app, flow, &settings, keep_data);
+pub fn spawn(
+    app: AppEntry,
+    others: &[AppEntry],
+    flow: Flow,
+    settings: Settings,
+    keep_data: bool,
+) -> Job {
+    let steps = build_plan(&app, others, flow, &settings, keep_data);
     spawn_with_steps(app, flow, settings, steps)
 }
 
@@ -2136,6 +2226,7 @@ pub fn selftest() -> i32 {
     println!("selftest root: {}", root.display());
     let steps = build_plan_with_discovery(
         &app,
+        &[],
         Flow::Purge,
         &settings,
         false,
@@ -2400,6 +2491,7 @@ mod tests {
         // to be installed on the CI runner.
         build_plan_with_discovery(
             app,
+            &[],
             flow,
             settings,
             keep_data,
@@ -2641,6 +2733,7 @@ mod tests {
         let settings = Settings::default();
         let services_unknown = build_plan_with_discovery(
             &a,
+            &[],
             Flow::Purge,
             &settings,
             true,
@@ -2652,6 +2745,7 @@ mod tests {
 
         let tasks_unknown = build_plan_with_discovery(
             &a,
+            &[],
             Flow::Uninstall,
             &settings,
             true,
@@ -2667,6 +2761,7 @@ mod tests {
         let a = app("Demo", "D:\\Apps\\Demo");
         let steps = build_plan_with_discovery(
             &a,
+            &[],
             Flow::FilesOnly,
             &Settings::default(),
             true,
@@ -2729,6 +2824,71 @@ mod tests {
         if let (Some(b), Some(d)) = (backup, delete) {
             assert!(b < d, "registry must be exported before it is deleted");
         }
+    }
+
+    fn build_plan_with(app: &AppEntry, others: &[AppEntry], flow: Flow) -> Vec<Step> {
+        build_plan_with_discovery(
+            app,
+            others,
+            flow,
+            &Settings::default(),
+            true,
+            |_| Some(Vec::new()),
+            |_| Some(Vec::new()),
+        )
+    }
+
+    fn deletes_folder(steps: &[Step], dir: &str) -> bool {
+        steps.iter().any(|s| match &s.op {
+            Op::ForceDelete { paths } | Op::Recycle { paths } | Op::DeleteOnReboot { paths } => {
+                paths.iter().any(|p| p.eq_ignore_ascii_case(dir))
+            }
+            _ => false,
+        })
+    }
+
+    #[test]
+    fn a_folder_shared_with_another_app_is_never_deleted() {
+        let a = app("Demo", "D:\\Apps\\Shared");
+        let mut b = app("Other", "D:\\Apps\\Shared");
+        b.id = 2;
+        let others = [b];
+        for flow in [Flow::Uninstall, Flow::Purge, Flow::FilesOnly] {
+            let steps = build_plan_with(&a, &others, flow);
+            assert!(
+                !deletes_folder(&steps, "D:\\Apps\\Shared"),
+                "{flow:?} must not delete a shared folder"
+            );
+            assert!(
+                steps.iter().any(|s| s.detail.contains("Other")),
+                "{flow:?} must say which app kept the folder"
+            );
+        }
+        // The folder stays in Verify: skipping it is not a clean removal.
+        let steps = build_plan_with(&a, &others, Flow::Purge);
+        assert!(any_op(&steps, |op| matches!(
+            op,
+            Op::Verify { paths, .. }
+                if paths.iter().any(|p| p.eq_ignore_ascii_case("D:\\Apps\\Shared"))
+        )));
+    }
+
+    #[test]
+    fn a_folder_that_contains_another_app_is_shared_too() {
+        let a = app("Suite", "D:\\Apps\\Suite");
+        let mut b = app("Tool", "D:\\Apps\\Suite\\Tool");
+        b.id = 2;
+        let steps = build_plan_with(&a, &[b], Flow::Purge);
+        assert!(!deletes_folder(&steps, "D:\\Apps\\Suite"));
+    }
+
+    #[test]
+    fn an_unrelated_app_does_not_block_the_folder() {
+        let a = app("Demo", "D:\\Apps\\Demo");
+        let mut b = app("Other", "D:\\Apps\\Other");
+        b.id = 2;
+        let steps = build_plan_with(&a, &[b], Flow::Purge);
+        assert!(deletes_folder(&steps, "D:\\Apps\\Demo"));
     }
 
     #[test]

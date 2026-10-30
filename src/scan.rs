@@ -85,7 +85,16 @@ fn normalize(p: &str) -> String {
     p.trim().trim_matches('"').replace('/', "\\").to_lowercase()
 }
 
+/// Windows resolves `.` and `..` itself, so a lexical prefix would claim a
+/// target it does not own. Refuse those targets instead of guessing.
+fn has_dot_segments(p: &str) -> bool {
+    p.split(['\\', '/']).any(|c| c == "." || c == "..")
+}
+
 fn is_under(path: &str, root: &str) -> bool {
+    if has_dot_segments(path) || has_dot_segments(root) {
+        return false;
+    }
     let p = normalize(path);
     let r = normalize(root);
     // A component boundary is required: `D:\SharedToolsExtra` is not inside
@@ -1216,6 +1225,12 @@ mod tests {
             "D:\\SharedToolsExtra\\beta.exe",
             "D:\\SharedTools"
         ));
+        // Windows would resolve these to another folder; do not guess.
+        assert!(!is_under(
+            "D:\\SharedTools\\..\\Other\\beta.exe",
+            "D:\\SharedTools"
+        ));
+        assert!(!is_under("D:\\SharedTools\\.\\beta.exe", "D:\\SharedTools"));
         assert!(is_under("D:\\SharedTools\\alpha.exe", "D:\\SharedTools"));
         assert!(is_under("D:\\SharedTools", "D:\\SharedTools\\"));
     }
