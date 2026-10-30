@@ -213,6 +213,9 @@ struct SavedSecurity {
     descriptor: *mut c_void,
     owner: *mut c_void,
     group: *mut c_void,
+    // File id of the object this descriptor was captured from; restoration
+    // refuses to write it onto any other object.
+    object_id: u64,
 }
 
 impl Drop for SavedSecurity {
@@ -259,6 +262,26 @@ struct ProcessInformation {
 struct FileAttributeTagInfo {
     file_attributes: u32,
     reparse_tag: u32,
+}
+
+#[repr(C)]
+struct FileTime {
+    low: u32,
+    high: u32,
+}
+
+#[repr(C)]
+struct ByHandleFileInfo {
+    file_attributes: u32,
+    creation_time: FileTime,
+    last_access_time: FileTime,
+    last_write_time: FileTime,
+    volume_serial_number: u32,
+    file_size_high: u32,
+    file_size_low: u32,
+    number_of_links: u32,
+    file_index_high: u32,
+    file_index_low: u32,
 }
 
 #[repr(C)]
@@ -560,6 +583,7 @@ extern "system" {
         file_information: *mut c_void,
         buffer_size: u32,
     ) -> Bool;
+    fn GetFileInformationByHandle(file: Handle, file_information: *mut ByHandleFileInfo) -> Bool;
     fn SetFileInformationByHandle(
         file: Handle,
         information_class: i32,
@@ -2381,7 +2405,7 @@ fn allocate_admins_sid() -> Option<*mut c_void> {
     }
 }
 
-fn save_security(path: &Path) -> Option<SavedSecurity> {
+fn save_security(path: &Path, object_id: u64) -> Option<SavedSecurity> {
     let path_wide = wide(&long_path(&path.to_string_lossy()));
     let mut owner = null_mut();
     let mut group = null_mut();
@@ -2404,6 +2428,7 @@ fn save_security(path: &Path) -> Option<SavedSecurity> {
             descriptor,
             owner,
             group,
+            object_id,
         })
     } else {
         if !descriptor.is_null() {
@@ -2542,19 +2567,116 @@ fn take_ownership(path: &Path) -> bool {
     result
 }
 
-fn acl_snapshot_and_relax(path: &Path) -> Option<SavedSecurity> {
+fn handle_file_id(handle: Handle) -> Option<u64> {
+    let mut info: ByHandleFileInfo = unsafe { zeroed() };
+    if unsafe { GetFileInformationByHandle(handle, &mut info) } == 0 {
+        return None;
+    }
+    Some(((info.file_index_high as u64) << 32) | info.file_index_low as u64)
+}
+
+/// Pins the object for the duration of a path-based security operation. The
+/// handle shares no delete access, so while it is open the name cannot be
+/// re-pointed and the path resolves to exactly this object; OPEN_REPARSE_POINT
+/// plus the attribute check reject a junction at this component. Returns the
+/// handle and its file id so callers can compare against a baseline.
+fn pin_object_for_security(path: &Path) -> std::io::Result<(DirectoryHandle, u64)> {
+    let path_wide = wide(&path.to_string_lossy());
+    let handle = unsafe {
+        CreateFileW(
+            path_wide.as_ptr(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            null_mut(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            null_mut(),
+        )
+    };
+    if handle.is_null() || handle == -1isize as Handle {
+        return Err(std::io::Error::from_raw_os_error(
+            unsafe { GetLastError() } as i32
+        ));
+    }
+    let mut attributes = FileAttributeTagInfo {
+        file_attributes: 0,
+        reparse_tag: 0,
+    };
+    let queried = unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FILE_ATTRIBUTE_TAG_INFO_CLASS,
+            &mut attributes as *mut FileAttributeTagInfo as *mut c_void,
+            size_of::<FileAttributeTagInfo>() as u32,
+        ) != 0
+    };
+    if !queried || attributes.file_attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path is not a normal object",
+        ));
+    }
+    let Some(object_id) = handle_file_id(handle) else {
+        // Without a file id the object cannot be bound to a baseline later.
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file id is unavailable",
+        ));
+    };
+    Ok((DirectoryHandle(vec![handle]), object_id))
+}
+
+/// Restoration proceeds only for the object the descriptor was captured
+/// from: no baseline means no prior verified object to compare against.
+fn identity_matches(baseline: Option<u64>, current: u64) -> bool {
+    baseline.is_none_or(|expected| expected == current)
+}
+
+/// Captures the descriptor first; ownership/DACL changes run only when the
+/// capture succeeded (injected in tests as `save`/`mutate`).
+fn snapshot_then_mutate<T>(save: impl FnOnce() -> Option<T>, mutate: impl FnOnce()) -> Option<T> {
+    let saved = save()?;
+    mutate();
+    Some(saved)
+}
+
+fn acl_snapshot_and_relax(path: &Path, baseline: Option<u64>) -> Option<SavedSecurity> {
     // Enable backup/restore rights before trying to snapshot the descriptor.
     // Never alter ownership or the DACL if capturing the original state fails.
     let _ = enable_privilege("SeBackupPrivilege");
     let _ = enable_privilege("SeRestorePrivilege");
-    let saved = save_security(path)?;
-    let _ = take_ownership(path);
-    Some(saved)
+    // Both operations run against one freshly verified pin: the name cannot be
+    // re-pointed while it is open, and a baseline mismatch disables the
+    // fallback instead of mutating a replacement object.
+    let (_pin, current) = pin_object_for_security(path).ok()?;
+    if !identity_matches(baseline, current) {
+        return None;
+    }
+    snapshot_then_mutate(
+        || save_security(path, current),
+        || {
+            let _ = take_ownership(path);
+        },
+    )
 }
 
 fn restore_acl_snapshot(path: &Path, snapshot: &SavedSecurity) -> bool {
     // Do not gate restoration on Path::exists(): access-denied metadata can
     // report false even while the object survives and its ACL must be restored.
+    // Bind the write to a verified pin of the same object the descriptor was
+    // captured from; a replacement object never receives the saved DACL.
+    let Ok((_pin, current)) = pin_object_for_security(path) else {
+        return false;
+    };
+    if !identity_matches(Some(snapshot.object_id), current) {
+        return false;
+    }
     restore_security(path, snapshot)
 }
 
@@ -2716,7 +2838,9 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
         let mut directory_guard = match open_directory_guard(path) {
             Ok(handle) => Some(handle),
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                early_snapshot = acl_snapshot_and_relax(path);
+                // No verified object exists yet; the fresh pin inside
+                // acl_snapshot_and_relax is the binding for these operations.
+                early_snapshot = acl_snapshot_and_relax(path, None);
                 match open_directory_guard(path) {
                     Ok(handle) => Some(handle),
                     Err(retry_error) => {
@@ -2746,13 +2870,21 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
             }
         };
 
+        // File id of the verified target: permission changes and restoration
+        // attempted after the target handle was released must prove they still
+        // name this object.
+        let target_id = directory_guard
+            .as_ref()
+            .and_then(|guard| guard.0.last().copied())
+            .and_then(handle_file_id);
+
         // The verified directory handle remains open without FILE_SHARE_DELETE
         // while read_dir and recursive calls use the same path. This blocks
         // junction/rename swaps during traversal; failure is fail-closed.
         let mut listing = std::fs::read_dir(path);
         if matches!(&listing, Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied) {
             if early_snapshot.is_none() {
-                early_snapshot = acl_snapshot_and_relax(path);
+                early_snapshot = acl_snapshot_and_relax(path, target_id);
             }
             listing = std::fs::read_dir(path);
         }
@@ -2763,7 +2895,7 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
                     guard.release_target();
                 }
                 if let Some(snapshot) = early_snapshot.as_ref() {
-                    let restored = !is_reparse_point(path) && restore_acl_snapshot(path, snapshot);
+                    let restored = restore_acl_snapshot(path, snapshot);
                     record_delete_failure(
                         stats,
                         path,
@@ -2802,9 +2934,10 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
             if let Some(guard) = directory_guard.as_mut() {
                 guard.release_target();
             }
-            if early_snapshot.as_ref().is_some_and(|snapshot| {
-                is_reparse_point(path) || !restore_acl_snapshot(path, snapshot)
-            }) {
+            if early_snapshot
+                .as_ref()
+                .is_some_and(|snapshot| !restore_acl_snapshot(path, snapshot))
+            {
                 record_delete_failure(
                     stats,
                     path,
@@ -2823,24 +2956,16 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
         match std::fs::remove_dir(path) {
             Ok(()) => stats.deleted += 1,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                // The target handle is gone for deletion; refuse to touch
-                // permissions if the path now resolves to a reparse point.
-                if is_reparse_point(path) {
-                    record_delete_failure(
-                        stats,
-                        path,
-                        "target was replaced by a reparse point; refusing permission changes",
-                    );
-                    return;
-                }
-                let snapshot = early_snapshot.or_else(|| acl_snapshot_and_relax(path));
+                // acl_snapshot_and_relax re-pins and verifies the target id
+                // before touching permissions; a replacement fails closed.
+                let snapshot = early_snapshot.or_else(|| acl_snapshot_and_relax(path, target_id));
                 clear_readonly(path);
                 match std::fs::remove_dir(path) {
                     Ok(()) => stats.deleted += 1,
                     Err(retry_error) => {
-                        let restored = snapshot.as_ref().is_some_and(|saved| {
-                            !is_reparse_point(path) && restore_acl_snapshot(path, saved)
-                        });
+                        let restored = snapshot
+                            .as_ref()
+                            .is_some_and(|saved| restore_acl_snapshot(path, saved));
                         record_delete_failure(
                             stats,
                             path,
@@ -2857,9 +2982,9 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
                 }
             }
             Err(error) => {
-                let restore_failed = early_snapshot.as_ref().is_some_and(|snapshot| {
-                    is_reparse_point(path) || !restore_acl_snapshot(path, snapshot)
-                });
+                let restore_failed = early_snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| !restore_acl_snapshot(path, snapshot));
                 let detail = if restore_failed {
                     format!(
                         "directory removal failed; permissions were not restored: {}",
@@ -2876,7 +3001,9 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
         match std::fs::remove_file(path) {
             Ok(()) => stats.deleted += 1,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                let snapshot = acl_snapshot_and_relax(path);
+                // No directory guard exists for a file; the fresh pin inside
+                // acl_snapshot_and_relax is the binding for these operations.
+                let snapshot = acl_snapshot_and_relax(path, None);
                 clear_readonly(path);
                 match std::fs::remove_file(path) {
                     Ok(()) => stats.deleted += 1,
@@ -3805,6 +3932,27 @@ pub fn ensure_dir(path: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_security_is_restored_only_onto_its_original_object() {
+        // No baseline: no prior verified object exists to compare against, so
+        // the freshly verified pin is the binding for the operation.
+        assert!(identity_matches(None, 42));
+        assert!(identity_matches(Some(42), 42));
+        assert!(!identity_matches(Some(42), 7));
+    }
+
+    #[test]
+    fn snapshot_failure_prevents_permission_mutation() {
+        let mutated = std::cell::Cell::new(false);
+        let result: Option<i32> = snapshot_then_mutate(|| None, || mutated.set(true));
+        assert!(result.is_none());
+        assert!(!mutated.get());
+
+        let result = snapshot_then_mutate(|| Some(7), || mutated.set(true));
+        assert_eq!(result, Some(7));
+        assert!(mutated.get());
+    }
 
     #[test]
     fn task_name_inventory_is_exact_and_rejects_incomplete_rows() {
