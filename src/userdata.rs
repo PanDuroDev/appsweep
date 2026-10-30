@@ -91,10 +91,6 @@ pub fn load_from(p: &Path) -> Result<BTreeMap<String, Meta>, String> {
     }
 }
 
-pub fn load() -> Result<BTreeMap<String, Meta>, String> {
-    load_from(&path())
-}
-
 /// Writes the new document next to the old one and swaps it in, so an
 /// interrupted write leaves the previous file intact.
 fn write_atomic(p: &Path, text: &str) -> Result<(), String> {
@@ -126,6 +122,9 @@ pub fn save_to(p: &Path, app: &AppEntry) -> Result<(), String> {
     let _guard = lock(p)?;
     let mut all = load_from(p)?;
     let k = key(app);
+    if let Some(legacy) = legacy_key(app) {
+        all.remove(&legacy);
+    }
     let meta = Meta {
         favorite: app.favorite,
         hidden: app.hidden,
@@ -147,7 +146,11 @@ pub fn save(app: &AppEntry) -> Result<(), String> {
 
 /// Reapplies saved metadata to a freshly scanned list.
 pub fn apply(apps: &mut [AppEntry]) -> Result<(), String> {
-    let all = load()?;
+    apply_from(&path(), apps)
+}
+
+fn apply_from(p: &Path, apps: &mut [AppEntry]) -> Result<(), String> {
+    let all = load_from(p)?;
     if all.is_empty() {
         return Ok(());
     }
@@ -272,6 +275,75 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert!(all[&key(&a)].favorite);
         assert_eq!(all[&key(&b)].notes, "note");
+    }
+
+    #[test]
+    fn clearing_metadata_removes_legacy_record_before_apply() {
+        let dir = temp_dir("clear-legacy");
+        let p = dir.join("apps.json");
+        let app = store_app("MSTeams_26260.1717_x64__8wekyb3d8bbwe");
+        let legacy = legacy_key(&app).unwrap();
+        let mut all = BTreeMap::new();
+        all.insert(
+            legacy.clone(),
+            Meta {
+                hidden: true,
+                favorite: true,
+                notes: "old".into(),
+            },
+        );
+        all.insert(
+            "name:another".into(),
+            Meta {
+                favorite: true,
+                ..Meta::default()
+            },
+        );
+        std::fs::write(&p, serde_json::to_string(&all).unwrap()).unwrap();
+
+        let mut before = [app.clone()];
+        apply_from(&p, &mut before).unwrap();
+        assert!(before[0].hidden);
+        save_to(&p, &app).unwrap();
+        let all = load_from(&p).unwrap();
+        assert!(!all.contains_key(&legacy));
+        assert!(all["name:another"].favorite);
+        let mut apps = [app];
+        apply_from(&p, &mut apps).unwrap();
+        assert!(!apps[0].hidden);
+        assert!(!apps[0].favorite);
+        assert!(apps[0].notes.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn saving_metadata_replaces_legacy_record_even_when_keys_match() {
+        let dir = temp_dir("replace-legacy");
+        let p = dir.join("apps.json");
+        for full in ["MSTeams_26260.1717_x64__8wekyb3d8bbwe", "family"] {
+            let mut app = store_app(full);
+            let legacy = legacy_key(&app).unwrap();
+            let mut all = BTreeMap::new();
+            all.insert(
+                legacy.clone(),
+                Meta {
+                    hidden: true,
+                    ..Meta::default()
+                },
+            );
+            std::fs::write(&p, serde_json::to_string(&all).unwrap()).unwrap();
+            app.favorite = true;
+
+            save_to(&p, &app).unwrap();
+            let all = load_from(&p).unwrap();
+            assert_eq!(all.len(), 1);
+            assert!(all[&key(&app)].favorite);
+            assert!(!all[&key(&app)].hidden);
+            if legacy != key(&app) {
+                assert!(!all.contains_key(&legacy));
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

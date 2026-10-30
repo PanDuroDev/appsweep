@@ -372,30 +372,28 @@ impl AppSweep {
                 }
             }
             Act::Favorite(id) => {
-                let mut changed = None;
                 if let Some(app) = self.apps.iter_mut().find(|a| a.id == id) {
-                    app.favorite = !app.favorite;
-                    changed = Some(app.clone());
-                }
-                if let Some(app) = changed {
-                    if let Err(err) = crate::userdata::save(&app) {
+                    let previous = app.favorite;
+                    app.favorite = !previous;
+                    if let Err(err) = crate::userdata::save(app) {
+                        app.favorite = previous;
                         self.set_status(err);
                     }
                 }
             }
             Act::Hide(id) => {
-                let mut changed = None;
-                let mut shown = false;
-                if let Some(app) = self.apps.iter_mut().find(|a| a.id == id) {
-                    app.hidden = !app.hidden;
-                    shown = app.hidden;
-                    changed = Some(app.clone());
-                }
-                if let Some(app) = changed {
-                    if let Err(err) = crate::userdata::save(&app) {
+                let shown = if let Some(app) = self.apps.iter_mut().find(|a| a.id == id) {
+                    let previous = app.hidden;
+                    app.hidden = !previous;
+                    if let Err(err) = crate::userdata::save(app) {
+                        app.hidden = previous;
                         self.set_status(err);
+                        return;
                     }
-                }
+                    app.hidden
+                } else {
+                    return;
+                };
                 if self.selected == Some(id) {
                     self.selected = None;
                 }
@@ -1128,13 +1126,10 @@ impl AppSweep {
                         Asked::CopyPath(id) => self.handle(Act::CopyPath(id), ctx),
                         Asked::Run(id) => self.handle(Act::Run(id), ctx),
                         Asked::SetNotes { app_id, notes } => {
-                            let mut changed = None;
                             if let Some(a) = self.apps.iter_mut().find(|a| a.id == app_id) {
-                                a.notes = notes;
-                                changed = Some(a.clone());
-                            }
-                            if let Some(a) = changed {
-                                if let Err(err) = crate::userdata::save(&a) {
+                                let previous = std::mem::replace(&mut a.notes, notes);
+                                if let Err(err) = crate::userdata::save(a) {
+                                    a.notes = previous;
                                     self.set_status(err);
                                 }
                             }
@@ -1182,10 +1177,10 @@ impl eframe::App for AppSweep {
         }
         if let Some(res) = done {
             self.apps = res.apps;
+            self.warnings = res.warnings;
             if let Err(err) = crate::userdata::apply(&mut self.apps) {
                 self.warnings.push(err);
             }
-            self.warnings = res.warnings;
             self.scanning = false;
             self.scan_rx = None;
             self.scanned_once = true;
