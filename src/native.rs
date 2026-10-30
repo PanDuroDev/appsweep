@@ -2632,10 +2632,27 @@ fn pin_object_for_security(path: &Path) -> std::io::Result<(DirectoryHandle, u64
     Ok((DirectoryHandle(vec![handle]), object_id))
 }
 
+/// Baseline identity for a permission operation on a path.
+#[derive(Clone, Copy)]
+enum Baseline {
+    /// No verified object exists to compare against.
+    Absent,
+    /// The file id of the verified object.
+    Known(u64),
+    /// A verified object exists, but its file id could not be read: without
+    /// an identity the operation must not run.
+    Unreadable,
+}
+
 /// Restoration proceeds only for the object the descriptor was captured
-/// from: no baseline means no prior verified object to compare against.
-fn identity_matches(baseline: Option<u64>, current: u64) -> bool {
-    baseline.is_none_or(|expected| expected == current)
+/// from: `Absent` lets the freshly verified pin bind, `Unreadable` (the
+/// baseline exists but its id could not be read) fails closed.
+fn identity_matches(baseline: Baseline, current: u64) -> bool {
+    match baseline {
+        Baseline::Absent => true,
+        Baseline::Known(expected) => expected == current,
+        Baseline::Unreadable => false,
+    }
 }
 
 /// Captures the descriptor first; ownership/DACL changes run only when the
@@ -2646,7 +2663,7 @@ fn snapshot_then_mutate<T>(save: impl FnOnce() -> Option<T>, mutate: impl FnOnce
     Some(saved)
 }
 
-fn acl_snapshot_and_relax(path: &Path, baseline: Option<u64>) -> Option<SavedSecurity> {
+fn acl_snapshot_and_relax(path: &Path, baseline: Baseline) -> Option<SavedSecurity> {
     // Enable backup/restore rights before trying to snapshot the descriptor.
     // Never alter ownership or the DACL if capturing the original state fails.
     let _ = enable_privilege("SeBackupPrivilege");
@@ -2674,10 +2691,29 @@ fn restore_acl_snapshot(path: &Path, snapshot: &SavedSecurity) -> bool {
     let Ok((_pin, current)) = pin_object_for_security(path) else {
         return false;
     };
-    if !identity_matches(Some(snapshot.object_id), current) {
+    if !identity_matches(Baseline::Known(snapshot.object_id), current) {
         return false;
     }
     restore_security(path, snapshot)
+}
+
+/// After a failed removal: run restoration only when a snapshot exists and
+/// fold its outcome into the detail recorded in the report.
+fn removal_failure_detail<S>(
+    op: &str,
+    error: impl std::fmt::Display,
+    snapshot: Option<&S>,
+    restore: impl FnOnce(&S) -> bool,
+) -> String {
+    let restored = snapshot.is_some_and(restore);
+    if snapshot.is_some() && !restored {
+        format!(
+            "{} removal failed and permissions were not restored: {}",
+            op, error
+        )
+    } else {
+        format!("{} removal failed: {}", op, error)
+    }
 }
 
 fn remove_object(path: &Path) -> std::io::Result<()> {
@@ -2840,7 +2876,7 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
                 // No verified object exists yet; the fresh pin inside
                 // acl_snapshot_and_relax is the binding for these operations.
-                early_snapshot = acl_snapshot_and_relax(path, None);
+                early_snapshot = acl_snapshot_and_relax(path, Baseline::Absent);
                 match open_directory_guard(path) {
                     Ok(handle) => Some(handle),
                     Err(retry_error) => {
@@ -2870,13 +2906,19 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
             }
         };
 
-        // File id of the verified target: permission changes and restoration
+        // Baseline of the verified target: permission changes and restoration
         // attempted after the target handle was released must prove they still
-        // name this object.
-        let target_id = directory_guard
+        // name this object. The guard always verified an object here, so a
+        // failed id read is `Unreadable`, not "no baseline": it disables the
+        // post-release permission fallback instead of proceeding unbound.
+        let target_baseline = match directory_guard
             .as_ref()
             .and_then(|guard| guard.0.last().copied())
-            .and_then(handle_file_id);
+            .and_then(handle_file_id)
+        {
+            Some(id) => Baseline::Known(id),
+            None => Baseline::Unreadable,
+        };
 
         // The verified directory handle remains open without FILE_SHARE_DELETE
         // while read_dir and recursive calls use the same path. This blocks
@@ -2884,7 +2926,7 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
         let mut listing = std::fs::read_dir(path);
         if matches!(&listing, Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied) {
             if early_snapshot.is_none() {
-                early_snapshot = acl_snapshot_and_relax(path, target_id);
+                early_snapshot = acl_snapshot_and_relax(path, target_baseline);
             }
             listing = std::fs::read_dir(path);
         }
@@ -2958,41 +3000,27 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
                 // acl_snapshot_and_relax re-pins and verifies the target id
                 // before touching permissions; a replacement fails closed.
-                let snapshot = early_snapshot.or_else(|| acl_snapshot_and_relax(path, target_id));
+                let snapshot =
+                    early_snapshot.or_else(|| acl_snapshot_and_relax(path, target_baseline));
                 clear_readonly(path);
                 match std::fs::remove_dir(path) {
                     Ok(()) => stats.deleted += 1,
                     Err(retry_error) => {
-                        let restored = snapshot
-                            .as_ref()
-                            .is_some_and(|saved| restore_acl_snapshot(path, saved));
-                        record_delete_failure(
-                            stats,
-                            path,
-                            &if snapshot.is_some() && !restored {
-                                format!(
-                                    "directory removal failed and permissions were not restored: {}",
-                                    retry_error
-                                )
-                            } else {
-                                format!("directory removal failed: {}", retry_error)
-                            },
+                        let detail = removal_failure_detail(
+                            "directory",
+                            retry_error,
+                            snapshot.as_ref(),
+                            |saved| restore_acl_snapshot(path, saved),
                         );
+                        record_delete_failure(stats, path, &detail);
                     }
                 }
             }
             Err(error) => {
-                let restore_failed = early_snapshot
-                    .as_ref()
-                    .is_some_and(|snapshot| !restore_acl_snapshot(path, snapshot));
-                let detail = if restore_failed {
-                    format!(
-                        "directory removal failed; permissions were not restored: {}",
-                        error
-                    )
-                } else {
-                    format!("directory removal failed: {}", error)
-                };
+                let detail =
+                    removal_failure_detail("directory", error, early_snapshot.as_ref(), |saved| {
+                        restore_acl_snapshot(path, saved)
+                    });
                 record_delete_failure(stats, path, &detail);
             }
         }
@@ -3003,26 +3031,18 @@ fn delete_tree(path: &Path, stats: &mut DeleteStats, depth: u32) {
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
                 // No directory guard exists for a file; the fresh pin inside
                 // acl_snapshot_and_relax is the binding for these operations.
-                let snapshot = acl_snapshot_and_relax(path, None);
+                let snapshot = acl_snapshot_and_relax(path, Baseline::Absent);
                 clear_readonly(path);
                 match std::fs::remove_file(path) {
                     Ok(()) => stats.deleted += 1,
                     Err(retry_error) => {
-                        let restored = snapshot
-                            .as_ref()
-                            .is_some_and(|saved| restore_acl_snapshot(path, saved));
-                        record_delete_failure(
-                            stats,
-                            path,
-                            &if snapshot.is_some() && !restored {
-                                format!(
-                                    "file removal failed and permissions were not restored: {}",
-                                    retry_error
-                                )
-                            } else {
-                                format!("file removal failed: {}", retry_error)
-                            },
+                        let detail = removal_failure_detail(
+                            "file",
+                            retry_error,
+                            snapshot.as_ref(),
+                            |saved| restore_acl_snapshot(path, saved),
                         );
+                        record_delete_failure(stats, path, &detail);
                     }
                 }
             }
@@ -3090,6 +3110,16 @@ fn is_root_path(path: &str) -> bool {
     false
 }
 
+/// Pure report assembly: the stats counters and first error surface to the
+/// UI unchanged.
+fn delete_report(stats: DeleteStats) -> DeleteReport {
+    DeleteReport {
+        deleted: stats.deleted,
+        failed: stats.failed,
+        first_error: stats.first_error,
+    }
+}
+
 pub fn force_delete(path: &str) -> DeleteReport {
     let mut stats = DeleteStats {
         deleted: 0,
@@ -3118,11 +3148,7 @@ pub fn force_delete(path: &str) -> DeleteReport {
             delete_tree(Path::new(&long), &mut stats, 0);
         }
     }
-    DeleteReport {
-        deleted: stats.deleted,
-        failed: stats.failed,
-        first_error: stats.first_error,
-    }
+    delete_report(stats)
 }
 
 /// Self-test helper: returns 1 when an allowed Everyone ACE grants full control,
@@ -3935,11 +3961,58 @@ mod tests {
 
     #[test]
     fn saved_security_is_restored_only_onto_its_original_object() {
-        // No baseline: no prior verified object exists to compare against, so
+        // Absent: no prior verified object exists to compare against, so
         // the freshly verified pin is the binding for the operation.
-        assert!(identity_matches(None, 42));
-        assert!(identity_matches(Some(42), 42));
-        assert!(!identity_matches(Some(42), 7));
+        assert!(identity_matches(Baseline::Absent, 42));
+        assert!(identity_matches(Baseline::Known(42), 42));
+        assert!(!identity_matches(Baseline::Known(42), 7));
+    }
+
+    #[test]
+    fn unreadable_identity_disables_the_permission_fallback() {
+        // The two states a guard can produce must not collapse into one:
+        // "no verified object" may proceed on the fresh pin, "verified
+        // object whose id could not be read" must fail closed.
+        assert!(identity_matches(Baseline::Absent, 42));
+        assert!(!identity_matches(Baseline::Unreadable, 42));
+    }
+
+    #[test]
+    fn failed_removal_restores_and_reports() {
+        let mut restores = 0;
+        let detail = removal_failure_detail("directory", "locked", Some(&7), |_| {
+            restores += 1;
+            false
+        });
+        // A failed deletion triggers restoration...
+        assert_eq!(restores, 1);
+        // ...and the failed restoration is visible in the recorded detail.
+        assert!(detail.contains("permissions were not restored"));
+        let mut stats = DeleteStats {
+            deleted: 0,
+            failed: 0,
+            first_error: String::new(),
+        };
+        record_delete_failure(&mut stats, Path::new(r"C:\Apps\Demo"), &detail);
+        let report = delete_report(stats);
+        assert!(report.failed >= 1);
+        assert!(report.first_error.contains("permissions were not restored"));
+
+        // Without a snapshot no restoration runs and the detail stays plain.
+        let detail = removal_failure_detail("file", "locked", None::<&i32>, |_| {
+            restores += 1;
+            false
+        });
+        assert_eq!(restores, 1);
+        assert!(!detail.contains("not restored"));
+
+        // A completed restoration reports plain.
+        let detail = removal_failure_detail("file", "locked", Some(&7), |_| {
+            restores += 1;
+            true
+        });
+        assert_eq!(restores, 2);
+        assert!(!detail.contains("not restored"));
     }
 
     #[test]
