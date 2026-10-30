@@ -100,6 +100,7 @@ pub enum Op {
         package: Option<String>,
     },
     CleanTemp,
+    FinishRestorePoint,
 }
 
 pub struct Job {
@@ -800,6 +801,19 @@ pub fn build_plan(app: &AppEntry, flow: Flow, settings: &Settings, keep_data: bo
         false,
     );
 
+    // BEGIN without END leaves a System Restore transaction open, which blocks
+    // other installers from taking restore points. Never optional, so a chain
+    // that stopped early still closes it.
+    if settings.create_restore_point {
+        add(
+            "Close the restore point",
+            "Finish the System Restore transaction",
+            Op::FinishRestorePoint,
+            false,
+            false,
+        );
+    }
+
     steps
 }
 
@@ -1027,12 +1041,33 @@ fn verify_all(
 
 // ---------------------------------------------------------------- execution
 
+/// Turns the stage/status pair from `native::create_restore_point` into a
+/// message that names the actual cause. The old code read `GetLastError()`,
+/// which has nothing to do with this API, and treated every code 5 as "needs
+/// administrator" even when the API had refused for another reason.
+fn restore_failure(rc: i32, status: i32) -> String {
+    match rc {
+        1 => format!("Could not load srclient.dll (code {})", status),
+        2 => "System Restore is not available on this system".into(),
+        3 if status == 5 => "Administrator rights are required".into(),
+        3 if status != 0 => format!("Could not create a restore point (code {})", status),
+        3 => "The restore API refused the request without a status".into(),
+        4 => format!("COM could not start for System Restore (0x{:08X})", status),
+        _ => format!(
+            "Could not create a restore point (code {})",
+            if status != 0 { status } else { rc }
+        ),
+    }
+}
+
 struct Runner {
     tx: Sender<(usize, StepStatus, String)>,
     verified_gone: bool,
     app: AppEntry,
     backup_dir: PathBuf,
     log: Vec<String>,
+    /// Sequence of the open restore transaction, if one was accepted.
+    restore_sequence: Option<i64>,
 }
 
 impl Runner {
@@ -1079,18 +1114,49 @@ impl Runner {
                 }
             }
             Op::RestorePoint { desc } => {
-                let rc = crate::native::create_restore_point(desc);
-                if rc == 0 {
-                    (StepStatus::Ok, "Restore point created".into())
-                } else if rc == 5 {
-                    (StepStatus::Warn, "Administrator rights are required".into())
+                let (rc, status, sequence) = crate::native::create_restore_point(desc);
+                if rc != 0 {
+                    return (StepStatus::Warn, restore_failure(rc, status));
+                }
+                self.restore_sequence = (sequence != 0).then_some(sequence);
+                // Windows suppresses frequent points and reuses a recent one,
+                // so "created" would be a claim this API cannot make.
+                if sequence != 0 {
+                    (
+                        StepStatus::Ok,
+                        format!(
+                            "Restore point requested (sequence {}) - Windows may reuse a recent one",
+                            sequence
+                        ),
+                    )
                 } else {
                     (
-                        StepStatus::Warn,
-                        format!("Could not create a restore point (code {})", rc),
+                        StepStatus::Ok,
+                        "Restore point requested - Windows may reuse a recent one".into(),
                     )
                 }
             }
+            Op::FinishRestorePoint => match self.restore_sequence.take() {
+                None => (StepStatus::Skip, "No restore point was opened".into()),
+                Some(seq) => {
+                    let (rc, status) = crate::native::finish_restore_point(seq);
+                    if rc == 0 {
+                        (
+                            StepStatus::Ok,
+                            format!("Restore point closed (sequence {})", seq),
+                        )
+                    } else {
+                        (
+                            StepStatus::Warn,
+                            format!(
+                                "Could not close the restore point {} (code {})",
+                                seq,
+                                if status != 0 { status } else { rc }
+                            ),
+                        )
+                    }
+                }
+            },
             Op::BackupRegistry { root, key } => {
                 let _ = std::fs::create_dir_all(&self.backup_dir);
                 // One file per run: a second uninstall of the same app must not
@@ -1517,6 +1583,7 @@ pub fn spawn(app: AppEntry, flow: Flow, settings: Settings, keep_data: bool) -> 
         app: app.clone(),
         backup_dir,
         log: Vec::new(),
+        restore_sequence: None,
     };
 
     let step_ops: Vec<(usize, Op, bool, bool)> = steps
@@ -2143,9 +2210,13 @@ mod tests {
                 flow
             );
             // Op is not PartialEq (it holds whole plans' worth of data), so
-            // compare titles instead.
+            // compare titles instead. Closing the restore transaction is the
+            // only step allowed to follow the read-only verification.
+            let last_work = steps
+                .iter()
+                .rposition(|s| !matches!(s.op, Op::FinishRestorePoint));
             assert_eq!(
-                steps.last().map(|s| s.title.as_str()),
+                last_work.map(|i| steps[i].title.as_str()),
                 Some("Verify the result"),
                 "{:?} verify must be the last step",
                 flow
@@ -2367,5 +2438,39 @@ mod tests {
         assert!(!job.success);
         assert!(job.steps[1].status == Fail && job.steps[2].status == Fail);
         assert_eq!(job.summary, "1 ok / 0 warnings / 2 failed");
+    }
+
+    #[test]
+    fn a_restore_point_is_closed_after_the_work() {
+        let settings = Settings {
+            create_restore_point: true,
+            ..Default::default()
+        };
+        for flow in [Flow::Uninstall, Flow::Purge, Flow::FilesOnly] {
+            let steps = build_plan(&app("Demo", "D:\\Demo"), flow, &settings, false);
+            let begin = steps
+                .iter()
+                .position(|s| matches!(s.op, Op::RestorePoint { .. }))
+                .expect("no restore point opened");
+            let verify = steps
+                .iter()
+                .position(|s| matches!(s.op, Op::Verify { .. }))
+                .expect("no verify");
+            let end = steps.len() - 1;
+            assert!(matches!(steps[end].op, Op::FinishRestorePoint));
+            // Closing the transaction is not something the cascade may skip.
+            assert!(!steps[end].optional && !steps[end].skip_if_gone);
+            assert!(begin < verify && verify < end);
+        }
+    }
+
+    #[test]
+    fn a_refused_restore_point_is_not_blamed_on_administrator_rights() {
+        assert_eq!(restore_failure(3, 5), "Administrator rights are required");
+        assert!(restore_failure(3, 1058).contains("1058"));
+        assert!(restore_failure(3, 0).contains("refused"));
+        assert!(restore_failure(1, 2).contains("srclient.dll"));
+        assert!(restore_failure(2, 127).contains("not available"));
+        assert!(restore_failure(4, 0x8001_0106u32 as i32).contains("0x80010106"));
     }
 }

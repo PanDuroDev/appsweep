@@ -11,6 +11,9 @@ mod ui;
 mod userdata;
 
 fn main() {
+    // Before any window exists: the System Restore service needs access to our
+    // COM proxies, and CoInitializeSecurity is too late once winit has run.
+    native::init_com_security();
     let args: Vec<String> = std::env::args().collect();
     if let Some(pos) = args.iter().position(|a| a == "--plan") {
         if let Some(path) = args.get(pos + 1) {

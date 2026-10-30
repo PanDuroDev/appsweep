@@ -25,6 +25,7 @@
 #include <commoncontrols.h>
 #include <objbase.h>
 #include <sddl.h>
+#include <srrestoreptapi.h>
 #include <tlhelp32.h>
 #include <winsvc.h>
 #include <string>
@@ -910,41 +911,111 @@ int as_delete_on_reboot(const wchar_t* path) {
 }
 
 // ---------------------------------------------------------------- system restore
+//
+// The restore-point API reports failure in STATEMGRSTATUS.nStatus, not in
+// GetLastError, and a BEGIN_SYSTEM_CHANGE has to be paired with an
+// END_SYSTEM_CHANGE carrying the same sequence number. Leaving the pair open
+// blocks other installers from creating restore points.
 
-typedef BOOL(WINAPI* SRSetRestorePointWFn)(void*, void*);
+typedef BOOL(WINAPI* RestorePointFn)(PRESTOREPOINTINFOW, PSTATEMGRSTATUS);
 
-int as_create_restore_point(const wchar_t* description) {
-    HMODULE dll = LoadLibraryW(L"srclient.dll");
-    if (!dll) return (int)GetLastError();
-    auto fn = (SRSetRestorePointWFn)GetProcAddress(dll, "SRSetRestorePointW");
-    int rc = 0;
-    if (!fn) {
-        rc = ERROR_PROC_NOT_FOUND;
-    } else {
-        // RESTOREPOINTINFOW { DWORD dwEventType; DWORD dwRestorePtType; INT64 llSequenceNumber; WCHAR szDescription[256]; }
-        struct RP {
-            DWORD dwEventType;
-            DWORD dwRestorePtType;
-            INT64 llSequenceNumber;
-            WCHAR szDescription[256];
-        };
-        struct SM {
-            DWORD dwEventType;
-            DWORD dwRestorePtType;
-            INT64 llSequenceNumber;
-        };
-        RP rp{};
-        SM sm{};
-        rp.dwEventType = 100;      // BEGIN_SYSTEM_CHANGE
-        rp.dwRestorePtType = 0;    // APPLICATION_INSTALL
-        rp.llSequenceNumber = 0;
-        wcsncpy_s(rp.szDescription, description ? description : L"AppSweep", _TRUNCATE);
-        // SRSetRestorePointW takes exactly two arguments:
-        //   BOOL SRSetRestorePointW(PRESTOREPOINTINFOW, PSTATEMGRSTATUS)
-        if (!fn(&rp, &sm)) rc = (int)GetLastError();
+// Stage codes, so the caller can tell "no dll" from "API said no".
+enum {
+    RESTORE_OK = 0,
+    RESTORE_DLL = 1,      // srclient.dll could not be loaded
+    RESTORE_EXPORT = 2,   // SRSetRestorePointW is missing from the dll
+    RESTORE_REFUSED = 3,  // the API returned FALSE; reason is in *status
+    RESTORE_COM = 4,      // CoInitializeEx failed on this thread
+};
+
+// One SRSetRestorePointW call with the COM the API needs on the calling
+// thread. `description` may be null (the END call does not use it).
+static int call_restore_point(int event, int type, int64_t sequence,
+                              const wchar_t* description, int* status,
+                              int64_t* out_sequence) {
+    if (status) *status = 0;
+    if (out_sequence) *out_sequence = 0;
+
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    if (FAILED(hr)) {
+        if (status) *status = (int)hr;
+        return RESTORE_COM;
     }
-    FreeLibrary(dll);
-    return rc;
+    bool owns_com = hr == S_OK || hr == S_FALSE;
+
+    int stage = RESTORE_OK;
+    HMODULE dll = LoadLibraryW(L"srclient.dll");
+    if (!dll) {
+        if (status) *status = (int)GetLastError();
+        stage = RESTORE_DLL;
+    } else {
+        auto fn = (RestorePointFn)GetProcAddress(dll, "SRSetRestorePointW");
+        if (!fn) {
+            if (status) *status = ERROR_PROC_NOT_FOUND;
+            stage = RESTORE_EXPORT;
+        } else {
+            RESTOREPOINTINFOW rp{};
+            STATEMGRSTATUS sm{};
+            rp.dwEventType = (DWORD)event;
+            rp.dwRestorePtType = (DWORD)type;
+            rp.llSequenceNumber = sequence;
+            if (description) wcsncpy_s(rp.szDescription, description, _TRUNCATE);
+            if (fn(&rp, &sm)) {
+                // Windows suppresses frequent points and reports the point it
+                // reused, so a sequence proves a point exists, not that this
+                // call created a fresh one.
+                if (out_sequence) *out_sequence = sm.llSequenceNumber;
+            } else {
+                if (status) *status = (int)sm.nStatus;
+                stage = RESTORE_REFUSED;
+            }
+        }
+        FreeLibrary(dll);
+    }
+
+    if (owns_com) CoUninitialize();
+    return stage;
+}
+
+// Opens the transaction. `sequence` receives the id needed to close it, or 0
+// when the call did not produce one.
+int as_create_restore_point(const wchar_t* description, int* status, int64_t* sequence) {
+    return call_restore_point(BEGIN_SYSTEM_CHANGE, APPLICATION_UNINSTALL, 0,
+                              description ? description : L"AppSweep", status, sequence);
+}
+
+// Closes the transaction opened above. Refuses sequence 0, because that is
+// not an id this API ever hands out.
+int as_finish_restore_point(int64_t sequence, int* status) {
+    if (sequence == 0) return (int)ERROR_INVALID_PARAMETER;
+    return call_restore_point(END_SYSTEM_CHANGE, APPLICATION_UNINSTALL, sequence,
+                              nullptr, status, nullptr);
+}
+
+// Called once at startup, before anything else touches COM. The state manager
+// lives in a service, so the proxy needs explicit launch and access grants.
+int as_init_com_security() {
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) return (int)hr;
+    bool owns_com = hr == S_OK || hr == S_FALSE;
+
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            L"D:(A;;GA;;;SY)(A;;GA;;;LS)(A;;GA;;;NS)", SDDL_REVISION_1, &sd, nullptr)) {
+        int err = (int)GetLastError();
+        if (owns_com) CoUninitialize();
+        return err;
+    }
+
+    HRESULT sec = CoInitializeSecurity(sd, -1, nullptr, nullptr,
+                                       RPC_C_AUTHN_LEVEL_DEFAULT,
+                                       RPC_C_IMP_LEVEL_IMPERSONATE, nullptr,
+                                       EOAC_NONE, nullptr);
+    LocalFree(sd);
+    if (owns_com) CoUninitialize();
+    // RPC_E_TOO_LATE means somebody already called this; that is not proof the
+    // permissions are the ones the restore API needs, so report it unchanged.
+    return sec == S_OK ? 0 : (int)sec;
 }
 
 // ---------------------------------------------------------------- misc

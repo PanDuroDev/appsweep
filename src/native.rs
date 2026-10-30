@@ -75,7 +75,9 @@ extern "C" {
     fn as_grants_everyone_full_control(path: *const u16) -> i32;
     fn as_grant_everyone_full_control(path: *const u16) -> i32;
     fn as_delete_on_reboot(path: *const u16) -> i32;
-    fn as_create_restore_point(desc: *const u16) -> i32;
+    fn as_create_restore_point(desc: *const u16, status: *mut i32, sequence: *mut i64) -> i32;
+    fn as_finish_restore_point(sequence: i64, status: *mut i32) -> i32;
+    fn as_init_com_security() -> i32;
     fn as_delete_scheduled_task(name: *const u16) -> i32;
     fn as_list_tasks_under(path: *const u16, out: *mut u16, cap: i32) -> i32;
     fn as_path_size(path: *const u16) -> u64;
@@ -426,9 +428,28 @@ pub fn delete_on_reboot(path: &str) -> i32 {
     unsafe { as_delete_on_reboot(w.as_ptr()) }
 }
 
-pub fn create_restore_point(desc: &str) -> i32 {
+/// Opens a System Restore transaction. Returns (stage, status, sequence):
+/// the stage says where it stopped, `status` carries the API error, and
+/// `sequence` is the id needed to close the transaction (0 when absent).
+pub fn create_restore_point(desc: &str) -> (i32, i32, i64) {
     let w = wide(desc);
-    unsafe { as_create_restore_point(w.as_ptr()) }
+    let mut status = 0i32;
+    let mut sequence = 0i64;
+    let rc = unsafe { as_create_restore_point(w.as_ptr(), &mut status, &mut sequence) };
+    (rc, status, sequence)
+}
+
+/// Closes the transaction opened by `create_restore_point`.
+pub fn finish_restore_point(sequence: i64) -> (i32, i32) {
+    let mut status = 0i32;
+    let rc = unsafe { as_finish_restore_point(sequence, &mut status) };
+    (rc, status)
+}
+
+/// Grants the System Restore service access to our COM proxies. Call early,
+/// once, from the main thread.
+pub fn init_com_security() -> i32 {
+    unsafe { as_init_com_security() }
 }
 
 pub fn delete_scheduled_task(name: &str) -> i32 {
