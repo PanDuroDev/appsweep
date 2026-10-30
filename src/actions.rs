@@ -109,7 +109,6 @@ pub enum Op {
         shortcuts: Vec<String>,
         package: Option<String>,
     },
-    CleanTemp,
 }
 
 pub struct Job {
@@ -350,17 +349,6 @@ pub fn find_traces(app: &AppEntry) -> Vec<PathBuf> {
             {
                 continue;
             }
-            if looks_like_trace(name, app) {
-                push(d);
-            }
-        }
-    }
-
-    // Per-user temp folder
-    if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        let temp = PathBuf::from(local).join("Temp");
-        for d in subdirs(&temp) {
-            let name = d.file_name().and_then(|s| s.to_str()).unwrap_or("");
             if looks_like_trace(name, app) {
                 push(d);
             }
@@ -752,13 +740,6 @@ where
                     true,
                 );
             }
-            add(
-                "Clean temporary files",
-                "Delete temporary installer leftovers",
-                Op::CleanTemp,
-                false,
-                true,
-            );
         }
         Flow::Purge => {
             let mut paths: Vec<String> = Vec::new();
@@ -849,14 +830,6 @@ where
             }
 
             add(
-                "Clean temporary files",
-                "Delete any temporary leftovers",
-                Op::CleanTemp,
-                false,
-                true,
-            );
-
-            add(
                 "Schedule leftover deletion",
                 "Delete what remains on reboot",
                 Op::DeleteOnReboot { paths },
@@ -886,8 +859,6 @@ where
                     );
                 }
             }
-            // No CleanTemp here: that op sweeps %LOCALAPPDATA%\\Temp by name
-            // match, which is outside the folder the user picked.
         }
     }
 
@@ -1803,34 +1774,6 @@ impl Runner {
                 };
                 (st, detail)
             }
-            Op::CleanTemp => {
-                let mut n = 0u32;
-                let mut matched = 0u32;
-                if let Ok(local) = std::env::var("LOCALAPPDATA") {
-                    let temp = PathBuf::from(local).join("Temp");
-                    let needle = norm(&self.app.name);
-                    if needle.len() >= 4 {
-                        for d in subdirs(&temp) {
-                            let name = d
-                                .file_name()
-                                .and_then(|s| s.to_str())
-                                .map(norm)
-                                .unwrap_or_default();
-                            if name.contains(&needle) {
-                                matched += 1;
-                                if crate::native::force_delete(&s(&d)).failed == 0 {
-                                    n += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-                if matched == 0 {
-                    (StepStatus::Skip, "No temporary files".into())
-                } else {
-                    partial(n, matched, "Cleaned temporary folders:")
-                }
-            }
         }
     }
 }
@@ -2474,7 +2417,6 @@ mod tests {
             "Removed services:",
             "Deleted shortcuts:",
             "Moved to the Recycle Bin:",
-            "Cleaned temporary folders:",
             "Scheduled items for deletion on reboot:",
         ] {
             assert!(src.contains(marker), "{} lost its partial count", marker);
@@ -2537,8 +2479,13 @@ mod tests {
         assert!(any_op(&steps, |o| matches!(o, Op::Verify { .. })));
         assert!(!any_op(&steps, |o| matches!(o, Op::DeleteReg { .. })));
         assert!(!any_op(&steps, |o| matches!(o, Op::DeleteShortcuts { .. })));
-        // The complaint behind #11: this flow also swept %LOCALAPPDATA%\\Temp.
-        assert!(!any_op(&steps, |o| matches!(o, Op::CleanTemp)));
+        // The complaint behind #11/#28: this flow used to sweep
+        // %LOCALAPPDATA%\\Temp by name. Nothing may leave the chosen folder.
+        for step in &steps {
+            if let Op::ForceDelete { paths } | Op::Recycle { paths } = &step.op {
+                assert_eq!(paths, &vec!["D:\\Apps\\Demo".to_string()]);
+            }
+        }
     }
 
     #[test]
@@ -2728,6 +2675,35 @@ mod tests {
             .position(|s| matches!(s.op, Op::DeleteReg { .. }));
         if let (Some(b), Some(d)) = (backup, delete) {
             assert!(b < d, "registry must be exported before it is deleted");
+        }
+    }
+
+    #[test]
+    fn no_plan_sweeps_the_per_user_temp_folder() {
+        let mut a = app("Demo", "D:\\Apps\\Demo");
+        a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
+        for flow in [Flow::Uninstall, Flow::Purge, Flow::FilesOnly] {
+            for keep_data in [true, false] {
+                let steps = build_plan_for_test(&a, flow, &Settings::default(), keep_data);
+                for step in &steps {
+                    let paths: &[String] = match &step.op {
+                        Op::ForceDelete { paths }
+                        | Op::Recycle { paths }
+                        | Op::DeleteOnReboot { paths }
+                        | Op::DeleteShortcuts { paths } => paths,
+                        Op::Verify { paths, .. } => paths,
+                        _ => &[],
+                    };
+                    // No step may target %LOCALAPPDATA%\Temp, whatever the flow
+                    // or the keep_data setting. The exact path is not probed.
+                    assert!(
+                        !paths
+                            .iter()
+                            .any(|p| p.to_lowercase().contains("\\appdata\\local\\temp\\")),
+                        "{flow:?} (keep_data={keep_data}) still targets a temp folder"
+                    );
+                }
+            }
         }
     }
 
