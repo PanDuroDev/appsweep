@@ -2679,6 +2679,35 @@ mod tests {
     }
 
     #[test]
+    fn no_plan_sweeps_the_per_user_temp_folder() {
+        let mut a = app("Demo", "D:\\Apps\\Demo");
+        a.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
+        for flow in [Flow::Uninstall, Flow::Purge, Flow::FilesOnly] {
+            for keep_data in [true, false] {
+                let steps = build_plan_for_test(&a, flow, &Settings::default(), keep_data);
+                for step in &steps {
+                    let paths: &[String] = match &step.op {
+                        Op::ForceDelete { paths }
+                        | Op::Recycle { paths }
+                        | Op::DeleteOnReboot { paths }
+                        | Op::DeleteShortcuts { paths } => paths,
+                        Op::Verify { paths, .. } => paths,
+                        _ => &[],
+                    };
+                    // No step may target %LOCALAPPDATA%\Temp, whatever the flow
+                    // or the keep_data setting. The exact path is not probed.
+                    assert!(
+                        !paths
+                            .iter()
+                            .any(|p| p.to_lowercase().contains("\\appdata\\local\\temp\\")),
+                        "{flow:?} (keep_data={keep_data}) still targets a temp folder"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn no_plan_ever_contains_a_protected_directory() {
         for (name, dir) in [
             ("Windows", "C:\\Windows"),
