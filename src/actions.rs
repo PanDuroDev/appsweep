@@ -505,14 +505,39 @@ fn shared_with<'a>(app: &AppEntry, others: &'a [AppEntry]) -> Option<&'a AppEntr
     })
 }
 
+/// Lexically resolves `.` and `..` and lowercases, keeping the drive/root
+/// part. Junctions and symlinks are not followed: two real paths that only meet
+/// through a link stay separate, which can keep a folder but never delete more.
+fn normalize_dir(p: &Path) -> String {
+    let raw = p.to_string_lossy().replace('/', "\\");
+    let mut parts: Vec<String> = Vec::new();
+    for part in raw.split('\\') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                // Never pop the drive/root component.
+                if parts.len() > 1 {
+                    parts.pop();
+                }
+            }
+            other => parts.push(other.to_lowercase()),
+        }
+    }
+    parts.join("\\")
+}
+
+/// True when deleting `path` would also destroy another listed app's folder.
+fn claimed_by_another(path: &Path, app: &AppEntry, others: &[AppEntry]) -> bool {
+    others.iter().any(|o| {
+        o.id != app.id
+            && o.install_dir
+                .as_ref()
+                .is_some_and(|d| install_dirs_overlap(path, d))
+    })
+}
+
 fn install_dirs_overlap(a: &Path, b: &Path) -> bool {
-    let f = |p: &Path| {
-        p.to_string_lossy()
-            .replace('/', "\\")
-            .trim_end_matches('\\')
-            .to_lowercase()
-    };
-    let (a, b) = (f(a), f(b));
+    let (a, b) = (normalize_dir(a), normalize_dir(b));
     let under = |child: &str, parent: &str| {
         !parent.is_empty()
             && child.len() > parent.len()
@@ -593,14 +618,22 @@ where
     let traces = if keep_data {
         Vec::new()
     } else {
+        // A trace can be the folder of another listed app (the scanner finds
+        // leftovers by name), so a shared folder must be dropped here too.
         find_traces(app)
+            .into_iter()
+            .filter(|t| !claimed_by_another(t, app, others))
+            .collect()
     };
 
     add(
         "Stop related processes",
         "Close any program running from the app folder",
         match &dir {
-            Some(d) if settings.kill_processes => Op::KillProcesses { path: s(d) },
+            // A shared folder may host the other app's process, not this one's.
+            Some(d) if settings.kill_processes && shared.is_none() => {
+                Op::KillProcesses { path: s(d) }
+            }
             _ => Op::Nothing,
         },
         false,
@@ -638,7 +671,9 @@ where
     // part of what Uninstall and Purge both have to remove - and what Verify
     // has to check afterwards, so they are discovered once, up front.
     let mut services_unknown = false;
-    let svc_names: Vec<String> = if flow == Flow::FilesOnly {
+    let svc_names: Vec<String> = if flow == Flow::FilesOnly || shared.is_some() {
+        // Files Only leaves services alone; a shared folder's services may
+        // belong to the other app, so they stay untouched too.
         Vec::new()
     } else {
         match &dir {
@@ -662,7 +697,7 @@ where
         }
     };
     let mut tasks_unknown = false;
-    let tasks: Vec<String> = if flow == Flow::FilesOnly {
+    let tasks: Vec<String> = if flow == Flow::FilesOnly || shared.is_some() {
         // This flow intentionally leaves services and scheduled tasks alone.
         Vec::new()
     } else {
@@ -2860,6 +2895,10 @@ mod tests {
                 "{flow:?} must not delete a shared folder"
             );
             assert!(
+                !any_op(&steps, |o| matches!(o, Op::KillProcesses { .. })),
+                "{flow:?} must not kill processes from a shared folder"
+            );
+            assert!(
                 steps.iter().any(|s| s.detail.contains("Other")),
                 "{flow:?} must say which app kept the folder"
             );
@@ -2889,6 +2928,54 @@ mod tests {
         b.id = 2;
         let steps = build_plan_with(&a, &[b], Flow::Purge);
         assert!(deletes_folder(&steps, "D:\\Apps\\Demo"));
+    }
+
+    #[test]
+    fn shared_folders_are_compared_after_resolving_dot_segments() {
+        assert!(install_dirs_overlap(
+            Path::new("D:\\Apps\\Other\\..\\Shared"),
+            Path::new("D:\\Apps\\Shared")
+        ));
+        assert!(install_dirs_overlap(
+            Path::new("D:\\Apps\\.\\Shared"),
+            Path::new("D:/apps/shared/")
+        ));
+        assert!(install_dirs_overlap(
+            Path::new("D:\\Apps"),
+            Path::new("D:\\Apps\\Sub")
+        ));
+        assert!(!install_dirs_overlap(
+            Path::new("C:\\Shared"),
+            Path::new("D:\\Shared")
+        ));
+        assert!(!install_dirs_overlap(
+            Path::new("D:\\Apps\\Foo"),
+            Path::new("D:\\Apps\\Foobar")
+        ));
+    }
+
+    #[test]
+    fn a_trace_that_reaches_another_app_is_never_deleted() {
+        let a = app("Demo", "D:\\Apps\\Demo");
+        let mut b = app("Other", "C:\\Users\\x\\AppData\\Local\\Demo");
+        b.id = 2;
+        let others = [a.clone(), b];
+        assert!(claimed_by_another(
+            Path::new("C:\\Users\\x\\AppData\\Local\\Demo"),
+            &a,
+            &others
+        ));
+        // A trace that contains the other app's folder is just as unsafe.
+        assert!(claimed_by_another(
+            Path::new("C:\\Users\\x\\AppData\\Local"),
+            &a,
+            &others
+        ));
+        assert!(!claimed_by_another(
+            Path::new("C:\\Users\\x\\AppData\\Local\\DemoCache"),
+            &a,
+            &others
+        ));
     }
 
     #[test]
