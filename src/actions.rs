@@ -393,6 +393,11 @@ fn reg_key_exists(root: RegRoot, path: &str) -> bool {
     reg_key_state(root, path).unwrap_or(true)
 }
 
+/// `Some(false)` is the only answer that proves an object is gone.
+fn confirmed_gone(state: Option<bool>) -> bool {
+    state == Some(false)
+}
+
 /// The elevated plan file stores roots as `RegRoot::label()` text. Unknown
 /// labels must be rejected: defaulting them to HKCU could delete an unrelated
 /// user key with the same subkey name.
@@ -1333,6 +1338,20 @@ fn verify_all(
         }
     }
 
+    // Nothing was probed, so nothing was proven. An empty plan is not
+    // evidence that the app was removed.
+    if left.is_empty()
+        && unknown.is_none()
+        && paths.is_empty()
+        && reg.is_empty()
+        && services.is_empty()
+        && tasks.is_empty()
+        && shortcuts.is_empty()
+        && package.is_none()
+    {
+        return Verdict::UnknownState("No resources were tracked to verify".into());
+    }
+
     if !left.is_empty() {
         let shown = left.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
         let more = if left.len() > 3 {
@@ -1368,19 +1387,24 @@ impl Runner {
         if self.verified_gone {
             return true;
         }
+        // Only a confirmed absence lets a later step skip itself. A probe that
+        // failed (access denied, a broken handle) is not proof of removal.
         let dir_gone = self
             .app
             .install_dir
             .as_ref()
-            .map(|d| !d.exists())
+            .map(|d| confirmed_gone(crate::native::path_state(&d.to_string_lossy())))
             .unwrap_or(true);
         let reg_gone = self
             .app
             .reg_key
             .as_ref()
-            .map(|(r, k)| !reg_key_exists(*r, k))
+            .map(|(r, k)| confirmed_gone(reg_key_state(*r, k)))
             .unwrap_or(true);
-        let pkg_gone = self.app.package_full_name.is_none() || self.app.source != Source::Uwp;
+        let pkg_gone = match (&self.app.package_full_name, self.app.source) {
+            (Some(full), Source::Uwp) => confirmed_gone(crate::native::package_registered(full)),
+            _ => true,
+        };
         if dir_gone && reg_gone && pkg_gone {
             self.verified_gone = true;
         }
@@ -2610,12 +2634,11 @@ mod tests {
             verify_all(&[missing.to_string()], &[], &[], &[], &[], None, false),
             Verdict::Gone
         );
-        // Nothing tracked at all is not proof of anything either: there is
-        // simply nothing to report as left, so it stays Gone only when every
-        // requested probe answered.
+        // Nothing tracked at all is not proof of anything either: an empty
+        // plan is not evidence that the app was removed.
         assert_eq!(
             verify_all(&[], &[], &[], &[], &[], None, false),
-            Verdict::Gone
+            Verdict::UnknownState("No resources were tracked to verify".to_string())
         );
         // A path that does exist is left behind, never a clean pass.
         let here = std::env::current_exe()
@@ -2625,6 +2648,13 @@ mod tests {
             Verdict::Left(msg) => assert!(msg.starts_with("Still on disk:")),
             other => panic!("expected Left, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn a_failed_probe_never_counts_as_gone() {
+        assert!(confirmed_gone(Some(false)));
+        assert!(!confirmed_gone(Some(true)));
+        assert!(!confirmed_gone(None));
     }
 
     #[test]
