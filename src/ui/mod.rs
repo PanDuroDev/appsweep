@@ -204,7 +204,9 @@ impl AppSweep {
             .apps
             .iter()
             .filter(|a| {
-                if a.hidden {
+                // The Hidden view is the only place a hidden app is listed,
+                // so it can always be brought back.
+                if a.hidden && self.filter != Filter::Hidden {
                     return false;
                 }
                 if a.is_system && !self.settings.show_system {
@@ -217,12 +219,13 @@ impl AppSweep {
                     return false;
                 }
                 match self.filter {
-                    Filter::All => true,
+                    Filter::All => !a.hidden,
                     Filter::Desktop => a.source == Source::Registry,
                     Filter::Store => a.source == Source::Uwp,
                     Filter::System => a.is_system,
                     Filter::Favorites => a.favorite,
                     Filter::Remnants => a.is_remnant(),
+                    Filter::Hidden => a.hidden,
                 }
             })
             .filter(|a| {
@@ -375,22 +378,32 @@ impl AppSweep {
                     changed = Some(app.clone());
                 }
                 if let Some(app) = changed {
-                    crate::userdata::save(&app);
+                    if let Err(err) = crate::userdata::save(&app) {
+                        self.set_status(err);
+                    }
                 }
             }
             Act::Hide(id) => {
                 let mut changed = None;
+                let mut shown = false;
                 if let Some(app) = self.apps.iter_mut().find(|a| a.id == id) {
-                    app.hidden = true;
+                    app.hidden = !app.hidden;
+                    shown = app.hidden;
                     changed = Some(app.clone());
                 }
                 if let Some(app) = changed {
-                    crate::userdata::save(&app);
+                    if let Err(err) = crate::userdata::save(&app) {
+                        self.set_status(err);
+                    }
                 }
                 if self.selected == Some(id) {
                     self.selected = None;
                 }
-                self.set_status("App hidden from the list");
+                self.set_status(if shown {
+                    "App hidden from the list"
+                } else {
+                    "App is back in the list"
+                });
             }
             Act::Run(id) => {
                 if let Some(app) = self.find(id) {
@@ -615,6 +628,7 @@ impl AppSweep {
                         Filter::System,
                         Filter::Favorites,
                         Filter::Remnants,
+                        Filter::Hidden,
                     ] {
                         if dialogs::nav_pill(ui, &p, f.label(), self.filter == f) {
                             self.filter = f;
@@ -1120,7 +1134,9 @@ impl AppSweep {
                                 changed = Some(a.clone());
                             }
                             if let Some(a) = changed {
-                                crate::userdata::save(&a);
+                                if let Err(err) = crate::userdata::save(&a) {
+                                    self.set_status(err);
+                                }
                             }
                         }
                         Asked::Confirm {
@@ -1166,7 +1182,9 @@ impl eframe::App for AppSweep {
         }
         if let Some(res) = done {
             self.apps = res.apps;
-            crate::userdata::apply(&mut self.apps);
+            if let Err(err) = crate::userdata::apply(&mut self.apps) {
+                self.warnings.push(err);
+            }
             self.warnings = res.warnings;
             self.scanning = false;
             self.scan_rx = None;

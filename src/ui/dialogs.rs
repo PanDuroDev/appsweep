@@ -19,6 +19,7 @@ pub enum Filter {
     System,
     Favorites,
     Remnants,
+    Hidden,
 }
 
 impl Filter {
@@ -30,6 +31,7 @@ impl Filter {
             Filter::System => "System apps",
             Filter::Favorites => "Favorites",
             Filter::Remnants => "Remnant",
+            Filter::Hidden => "Hidden",
         }
     }
 }

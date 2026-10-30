@@ -4,7 +4,7 @@
 
 use crate::model::{AppEntry, RegRoot, Source};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Meta {
@@ -23,8 +23,11 @@ impl Meta {
 }
 
 /// A stable name for one installed app. Registry entries use their key (the
-/// key is what gets deleted), Store apps their package name, shortcuts their
+/// key is what gets deleted), Store apps their package family, shortcuts their
 /// folder; the display name is only the last resort.
+///
+/// shortcut: two entries with no identity at all still share the name key.
+/// A separate identity for them needs a scanner-side id, not a name.
 pub fn key(app: &AppEntry) -> String {
     match app.source {
         Source::Registry => app
@@ -33,14 +36,36 @@ pub fn key(app: &AppEntry) -> String {
             .map(|(root, path)| format!("reg:{}:{}", reg_root_text(*root), path.to_lowercase())),
         Source::Uwp => app
             .package_full_name
-            .as_ref()
-            .map(|p| format!("uwp:{}", p.to_lowercase())),
+            .as_deref()
+            .map(|p| format!("uwp:{}", package_family(p).to_lowercase())),
         Source::Shortcut => app
             .install_dir
             .as_ref()
             .map(|d| format!("dir:{}", d.to_string_lossy().to_lowercase())),
     }
     .unwrap_or_else(|| format!("name:{}", app.name.to_lowercase()))
+}
+
+/// Older builds keyed Store apps by the full package name, which changes with
+/// every version. Existing records are still read under that key.
+fn legacy_key(app: &AppEntry) -> Option<String> {
+    if app.source != Source::Uwp {
+        return None;
+    }
+    app.package_full_name
+        .as_deref()
+        .map(|p| format!("uwp:{}", p.to_lowercase()))
+}
+
+/// `Name_Version_Arch_ResourceId_PublisherId` -> `Name_PublisherId`, the
+/// package family, which stays the same across package updates.
+fn package_family(full: &str) -> String {
+    let parts: Vec<&str> = full.split('_').collect();
+    if parts.len() == 5 {
+        format!("{}_{}", parts[0], parts[4])
+    } else {
+        full.to_string()
+    }
 }
 
 fn reg_root_text(root: RegRoot) -> &'static str {
@@ -55,17 +80,51 @@ pub fn path() -> PathBuf {
     crate::icons::app_data_dir().join("apps.json")
 }
 
-pub fn load() -> BTreeMap<String, Meta> {
-    std::fs::read_to_string(path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+/// A missing file is an empty store. A file that cannot be read or parsed is
+/// an error: it must never be replaced by whatever the caller had in mind.
+pub fn load_from(p: &Path) -> Result<BTreeMap<String, Meta>, String> {
+    match std::fs::read_to_string(p) {
+        Ok(text) => serde_json::from_str(&text)
+            .map_err(|e| format!("{} is not valid JSON ({e}); it was left as is", p.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+        Err(e) => Err(format!("Could not read {}: {e}", p.display())),
+    }
 }
 
-/// Records the current state of one app and writes the whole file back. A
-/// missing metadata file is not an error, an unreadable one is replaced.
-pub fn save(app: &AppEntry) {
-    let mut all = load();
+pub fn load() -> Result<BTreeMap<String, Meta>, String> {
+    load_from(&path())
+}
+
+/// Writes the new document next to the old one and swaps it in, so an
+/// interrupted write leaves the previous file intact.
+fn write_atomic(p: &Path, text: &str) -> Result<(), String> {
+    let tmp = p.with_extension("tmp");
+    std::fs::write(&tmp, text).map_err(|e| format!("Could not write {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, p).map_err(|e| format!("Could not replace {}: {e}", p.display()))
+}
+
+/// Serialises read-modify-write between two AppSweep windows.
+fn lock(p: &Path) -> Result<std::fs::File, String> {
+    let lock_path = p.with_extension("lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| format!("Could not open {}: {e}", lock_path.display()))?;
+    file.lock()
+        .map_err(|e| format!("Could not lock {}: {e}", lock_path.display()))?;
+    Ok(file)
+}
+
+pub fn save_to(p: &Path, app: &AppEntry) -> Result<(), String> {
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    }
+    // Held until the end of the function; dropping the file releases the lock.
+    let _guard = lock(p)?;
+    let mut all = load_from(p)?;
     let k = key(app);
     let meta = Meta {
         favorite: app.favorite,
@@ -77,33 +136,50 @@ pub fn save(app: &AppEntry) {
     } else {
         all.insert(k, meta);
     }
-    if let Ok(text) = serde_json::to_string_pretty(&all) {
-        let p = path();
-        if let Some(dir) = p.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(p, text);
-    }
+    let text = serde_json::to_string_pretty(&all)
+        .map_err(|e| format!("Could not encode {}: {e}", p.display()))?;
+    write_atomic(p, &text)
+}
+
+pub fn save(app: &AppEntry) -> Result<(), String> {
+    save_to(&path(), app)
 }
 
 /// Reapplies saved metadata to a freshly scanned list.
-pub fn apply(apps: &mut [AppEntry]) {
-    let all = load();
+pub fn apply(apps: &mut [AppEntry]) -> Result<(), String> {
+    let all = load()?;
     if all.is_empty() {
-        return;
+        return Ok(());
     }
     for app in apps.iter_mut() {
-        if let Some(m) = all.get(&key(app)) {
+        let found = all
+            .get(&key(app))
+            .or_else(|| legacy_key(app).and_then(|k| all.get(&k)));
+        if let Some(m) = found {
             app.favorite = m.favorite;
             app.hidden = m.hidden;
             app.notes = m.notes.clone();
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("appsweep-meta-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn store_app(full: &str) -> AppEntry {
+        let mut a = AppEntry::new(1, "Demo".into(), Source::Uwp);
+        a.package_full_name = Some(full.into());
+        a
+    }
 
     #[test]
     fn the_key_does_not_use_the_scan_id() {
@@ -140,6 +216,16 @@ mod tests {
     }
 
     #[test]
+    fn a_package_update_keeps_the_same_metadata_key() {
+        let old = store_app("MSTeams_26260.1717_x64__8wekyb3d8bbwe");
+        let new = store_app("MSTeams_26300.1000_x64__8wekyb3d8bbwe");
+        assert_eq!(key(&old), key(&new));
+        assert_eq!(key(&old), "uwp:msteams_8wekyb3d8bbwe");
+        let other = store_app("MSTeams_26260.1717_x64__9zzzzzzzzzzzz");
+        assert_ne!(key(&old), key(&other));
+    }
+
+    #[test]
     fn a_metadata_record_round_trips() {
         let m = Meta {
             favorite: true,
@@ -150,5 +236,53 @@ mod tests {
         assert_eq!(serde_json::from_str::<Meta>(&text).unwrap(), m);
         let loose: Meta = serde_json::from_str("{}").unwrap();
         assert!(loose.is_empty());
+    }
+
+    #[test]
+    fn a_missing_file_is_an_empty_store() {
+        let dir = temp_dir("missing");
+        assert!(load_from(&dir.join("apps.json")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn corrupt_metadata_is_never_overwritten() {
+        let dir = temp_dir("corrupt");
+        let p = dir.join("apps.json");
+        std::fs::write(&p, "{ not json").unwrap();
+        let mut app = AppEntry::new(1, "Demo".into(), Source::Registry);
+        app.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".into()));
+        app.favorite = true;
+        assert!(save_to(&p, &app).is_err());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "{ not json");
+    }
+
+    #[test]
+    fn two_saves_keep_both_records() {
+        let dir = temp_dir("twosaves");
+        let p = dir.join("apps.json");
+        let mut a = AppEntry::new(1, "A".into(), Source::Registry);
+        a.reg_key = Some((RegRoot::Hkcu, "Software\\A".into()));
+        a.favorite = true;
+        let mut b = AppEntry::new(2, "B".into(), Source::Registry);
+        b.reg_key = Some((RegRoot::Hkcu, "Software\\B".into()));
+        b.notes = "note".into();
+        save_to(&p, &a).unwrap();
+        save_to(&p, &b).unwrap();
+        let all = load_from(&p).unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all[&key(&a)].favorite);
+        assert_eq!(all[&key(&b)].notes, "note");
+    }
+
+    #[test]
+    fn a_completed_save_leaves_no_partial_file() {
+        let dir = temp_dir("atomic");
+        let p = dir.join("apps.json");
+        let mut app = AppEntry::new(1, "Demo".into(), Source::Registry);
+        app.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".into()));
+        app.favorite = true;
+        save_to(&p, &app).unwrap();
+        assert!(!p.with_extension("tmp").exists());
+        assert!(load_from(&p).unwrap().contains_key(&key(&app)));
     }
 }
