@@ -85,10 +85,39 @@ fn normalize(p: &str) -> String {
     p.trim().trim_matches('"').replace('/', "\\").to_lowercase()
 }
 
+/// Windows resolves `.` and `..` itself, so a lexical prefix would claim a
+/// target it does not own. Refuse those targets instead of guessing.
+fn has_dot_segments(p: &str) -> bool {
+    p.split(['\\', '/']).any(|c| c == "." || c == "..")
+}
+
 fn is_under(path: &str, root: &str) -> bool {
+    if has_dot_segments(path) || has_dot_segments(root) {
+        return false;
+    }
     let p = normalize(path);
     let r = normalize(root);
-    p.starts_with(&r)
+    // A component boundary is required: `D:\SharedToolsExtra` is not inside
+    // `D:\SharedTools`, and the drive root still matches everything on it.
+    let r = r.trim_end_matches('\\');
+    if r.is_empty() {
+        return false;
+    }
+    p == r || (p.starts_with(r) && p.as_bytes().get(r.len()) == Some(&b'\\'))
+}
+
+/// True when a start-menu shortcut target belongs to `app`: the same
+/// executable, or any executable inside the folder of an app whose exe is not
+/// known yet. A different known exe in that folder is another application.
+fn shortcut_target_belongs(app: &AppEntry, target: &str) -> bool {
+    match &app.launch_exe {
+        Some(exe) => normalize(&exe.to_string_lossy()) == normalize(target),
+        None => app
+            .install_dir
+            .as_ref()
+            .map(|d| is_under(target, &d.to_string_lossy()))
+            .unwrap_or(false),
+    }
 }
 
 /// Words too generic to identify a product on their own.
@@ -780,16 +809,10 @@ fn scan_shortcuts(apps: &mut Vec<AppEntry>, next_id: &mut u64) {
         let exe = PathBuf::from(&target);
         let mut attached = false;
         for app in apps.iter_mut() {
-            let hit = app
-                .install_dir
-                .as_ref()
-                .map(|d| is_under(&target, &d.to_string_lossy()))
-                .unwrap_or(false)
-                || app
-                    .launch_exe
-                    .as_ref()
-                    .map(|e| normalize(&e.to_string_lossy()) == normalize(&target))
-                    .unwrap_or(false);
+            // Exact executable match, or an app that knows its folder but not
+            // its exe may adopt a target inside it. A different exe in the same
+            // folder is a different application, not this one's shortcut.
+            let hit = shortcut_target_belongs(app, &target);
             if hit {
                 push_unique(&mut app.shortcuts, lnk.clone());
                 if app.launch_exe.is_none() {
@@ -862,15 +885,11 @@ fn dedupe(apps: Vec<AppEntry>) -> Vec<AppEntry> {
                 }
                 _ => false,
             };
-            let same_dir = match (&app.install_dir, &existing.install_dir) {
-                (Some(a), Some(b)) => {
-                    normalize(&a.to_string_lossy()) == normalize(&b.to_string_lossy())
-                }
+            let same_key = app.reg_key.is_some() && app.reg_key == existing.reg_key;
+            let same_package = match (&app.package_full_name, &existing.package_full_name) {
+                (Some(a), Some(b)) => !a.is_empty() && a.eq_ignore_ascii_case(b),
                 _ => false,
             };
-            let same_name = !app.name.is_empty()
-                && app.name.to_lowercase() == existing.name.to_lowercase()
-                && app.source == existing.source;
             // A shortcut-only entry whose name matches a registry product that
             // has no install path: same app, so fold them together.
             let name_bridge = app.source == Source::Shortcut
@@ -878,7 +897,12 @@ fn dedupe(apps: Vec<AppEntry>) -> Vec<AppEntry> {
                 && existing.install_dir.is_none()
                 && app.install_dir.is_some()
                 && names_related(&app.name, &existing.name);
-            if same_exe || same_dir || same_name || name_bridge {
+            // Two registrations with different keys are two removable products,
+            // even when they share a folder, a name or an executable. Keeping
+            // them apart keeps every key in the backup, delete and verify plans.
+            let keys_conflict =
+                matches!((&app.reg_key, &existing.reg_key), (Some(a), Some(b)) if a != b);
+            if (same_exe || same_key || same_package || name_bridge) && !keys_conflict {
                 // Prefer registry data, but keep useful fields from both.
                 if existing.uninstall_string.is_none() {
                     existing.uninstall_string = app.uninstall_string.clone();
@@ -906,6 +930,12 @@ fn dedupe(apps: Vec<AppEntry>) -> Vec<AppEntry> {
                 }
                 if existing.install_date.is_empty() {
                     existing.install_date = app.install_date.clone();
+                }
+                if existing.reg_key.is_none() {
+                    existing.reg_key = app.reg_key.clone();
+                }
+                if existing.package_full_name.is_none() {
+                    existing.package_full_name = app.package_full_name.clone();
                 }
                 for s in &app.shortcuts {
                     push_unique(&mut existing.shortcuts, s.clone());
@@ -1190,6 +1220,116 @@ mod tests {
             "c:\\program files\\app"
         ));
         assert!(!is_under("C:\\Other", "C:\\Program Files"));
+        // A shared prefix is not a parent folder.
+        assert!(!is_under(
+            "D:\\SharedToolsExtra\\beta.exe",
+            "D:\\SharedTools"
+        ));
+        // Windows would resolve these to another folder; do not guess.
+        assert!(!is_under(
+            "D:\\SharedTools\\..\\Other\\beta.exe",
+            "D:\\SharedTools"
+        ));
+        assert!(!is_under("D:\\SharedTools\\.\\beta.exe", "D:\\SharedTools"));
+        assert!(is_under("D:\\SharedTools\\alpha.exe", "D:\\SharedTools"));
+        assert!(is_under("D:\\SharedTools", "D:\\SharedTools\\"));
+    }
+
+    fn entry(id: u64, name: &str, source: Source) -> AppEntry {
+        AppEntry::new(id, name.to_string(), source)
+    }
+
+    #[test]
+    fn one_executable_with_two_registrations_keeps_both_keys() {
+        let mut machine = entry(1, "Demo", Source::Registry);
+        machine.launch_exe = Some(PathBuf::from("C:\\Demo\\demo.exe"));
+        machine.reg_key = Some((RegRoot::Hklm, "Software\\Demo".to_string()));
+        let mut user = entry(2, "Demo", Source::Registry);
+        user.launch_exe = Some(PathBuf::from("C:\\Demo\\demo.exe"));
+        user.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
+        let out = dedupe(vec![machine, user]);
+        assert_eq!(out.len(), 2, "two registrations are two removable entries");
+        assert_eq!(
+            out[0].reg_key,
+            Some((RegRoot::Hklm, "Software\\Demo".to_string()))
+        );
+        assert_eq!(
+            out[1].reg_key,
+            Some((RegRoot::Hkcu, "Software\\Demo".to_string()))
+        );
+    }
+
+    #[test]
+    fn different_exes_in_one_folder_stay_separate() {
+        let mut alpha = entry(1, "Alpha", Source::Shortcut);
+        alpha.launch_exe = Some(PathBuf::from("D:\\SharedTools\\alpha.exe"));
+        alpha.install_dir = Some(PathBuf::from("D:\\SharedTools"));
+        let mut beta = entry(2, "Beta", Source::Shortcut);
+        beta.launch_exe = Some(PathBuf::from("D:\\SharedTools\\beta.exe"));
+        beta.install_dir = Some(PathBuf::from("D:\\SharedTools"));
+        let out = dedupe(vec![alpha, beta]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].name, "Alpha");
+        assert_eq!(out[1].name, "Beta");
+        assert_eq!(
+            out[1].launch_exe.as_deref(),
+            Some(Path::new("D:\\SharedTools\\beta.exe"))
+        );
+    }
+
+    #[test]
+    fn a_display_name_is_not_an_identity() {
+        let mut first = entry(1, "Updater", Source::Registry);
+        first.publisher = "Acme".to_string();
+        first.reg_key = Some((RegRoot::Hkcu, "Software\\Acme\\Updater".to_string()));
+        first.launch_exe = Some(PathBuf::from("C:\\Acme\\updater.exe"));
+        let mut second = entry(2, "Updater", Source::Registry);
+        second.publisher = "Other".to_string();
+        second.reg_key = Some((RegRoot::Hkcu, "Software\\Other\\Updater".to_string()));
+        second.launch_exe = Some(PathBuf::from("C:\\Other\\updater.exe"));
+        let out = dedupe(vec![first, second]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].publisher, "Acme");
+        assert_eq!(out[1].publisher, "Other");
+    }
+
+    #[test]
+    fn shortcuts_never_attach_across_a_folder_boundary() {
+        let mut app = entry(1, "Shared Tools", Source::Registry);
+        app.launch_exe = Some(PathBuf::from("D:\\SharedTools\\alpha.exe"));
+        app.install_dir = Some(PathBuf::from("D:\\SharedTools"));
+        assert!(shortcut_target_belongs(&app, "D:/SharedTools/alpha.exe"));
+        assert!(!shortcut_target_belongs(&app, "D:\\SharedTools\\beta.exe"));
+        assert!(!shortcut_target_belongs(
+            &app,
+            "D:\\SharedToolsExtra\\beta.exe"
+        ));
+        // Without a known exe, an app may adopt any executable in its folder.
+        app.launch_exe = None;
+        assert!(shortcut_target_belongs(&app, "D:\\SharedTools\\beta.exe"));
+        assert!(!shortcut_target_belongs(
+            &app,
+            "D:\\SharedToolsExtra\\beta.exe"
+        ));
+    }
+
+    #[test]
+    fn a_shortcut_and_its_registration_merge_and_keep_the_key() {
+        let mut reg = entry(1, "Demo", Source::Registry);
+        reg.launch_exe = Some(PathBuf::from("C:\\Demo\\demo.exe"));
+        reg.reg_key = Some((RegRoot::Hkcu, "Software\\Demo".to_string()));
+        let mut link = entry(2, "Demo", Source::Shortcut);
+        link.launch_exe = Some(PathBuf::from("C:\\Demo\\demo.exe"));
+        link.install_dir = Some(PathBuf::from("C:\\Demo"));
+        link.shortcuts = vec![PathBuf::from("C:\\Start\\Demo.lnk")];
+        let out = dedupe(vec![reg, link]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].source, Source::Registry);
+        assert_eq!(
+            out[0].reg_key,
+            Some((RegRoot::Hkcu, "Software\\Demo".to_string()))
+        );
+        assert_eq!(out[0].shortcuts.len(), 1);
     }
 
     #[test]

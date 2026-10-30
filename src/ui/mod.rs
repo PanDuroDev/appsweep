@@ -1041,9 +1041,12 @@ impl AppSweep {
                 } => {
                     let mut s = self.settings.clone();
                     s.auto_cascade = auto_cascade;
+                    // The planner needs the other rows to see whether another
+                    // app also uses this folder.
+                    let others = self.apps.clone();
                     if let Some(app) = self.find(app_id) {
                         let app = app.clone();
-                        self.job = Some(actions::spawn(app, flow, s, keep_data));
+                        self.job = Some(actions::spawn(app, &others, flow, s, keep_data));
                     }
                     self.confirm = None;
                 }
